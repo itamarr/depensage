@@ -1,0 +1,22 @@
+# DepenSage Project Requirements
+
+# Core dependencies
+pandas>=1.0.0
+numpy>=1.18.0
+tensorflow>=2.4.0
+scikit-learn>=0.23.0
+
+# Google API integration
+google-api-python-client>=2.0.0
+google-auth-httplib2>=0.1.0
+google-auth-oauthlib>=0.4.0
+
+# Development dependencies
+pytest>=6.0.0
+pytest-cov>=2.10.0
+black>=20.8b1
+flake8>=3.8.0
+
+# Package building
+build>=0.7.0
+twine>=3.4.0
