@@ -1,5 +1,5 @@
 """
-Unit tests for the settings module.
+Unit tests for the settings module with module-level singleton pattern.
 """
 
 import unittest
@@ -9,123 +9,154 @@ import json
 import shutil
 from unittest.mock import patch
 
-from depensage.config.settings import Settings
-
+import depensage.config.settings
+from depensage.config.settings import load_settings, get_config_path, REQUIRED_SETTINGS
 
 class TestSettings(unittest.TestCase):
-    """Test cases for the Settings class."""
+    """Test cases for the settings module functions."""
 
     def setUp(self):
         """Set up the test environment."""
         # Create a temporary directory for test files
         self.test_dir = tempfile.mkdtemp()
         self.config_file = os.path.join(self.test_dir, 'config.json')
-        self.settings = Settings(self.config_file)
+
+        # Create a mock credentials file
+        self.credentials_file = os.path.join(self.test_dir, 'credentials.json')
+        with open(self.credentials_file, 'w') as f:
+            f.write('{}')
+
+        depensage.config.settings._settings_cache = None
 
     def tearDown(self):
         """Clean up after tests."""
         shutil.rmtree(self.test_dir)
 
-    def test_init_with_defaults(self):
-        """Test initialization with default settings."""
-        # Check that default settings were applied
-        self.assertEqual(self.settings.get('model_dir'), 'models')
-        self.assertEqual(self.settings.get('log_level'), 'INFO')
-        self.assertEqual(self.settings.get('spreadsheet_id'), '')
+        depensage.config.settings._settings_cache = None
+
+    def test_get_config_path(self):
+        """Test getting configuration path."""
+        # Test with explicit config file
+        self.assertEqual(get_config_path(self.config_file), self.config_file)
+
+        # Test default path
+        default_path = get_config_path()
+        self.assertTrue(default_path.endswith('/.depensage/config.json'))
 
     def test_load_nonexistent_file(self):
         """Test loading from a nonexistent file."""
         # File shouldn't exist yet
         self.assertFalse(os.path.exists(self.config_file))
 
-        # Load should return False but not fail
-        result = self.settings.load()
-        self.assertFalse(result)
+        # Load should raise ValueError
+        with self.assertRaises(ValueError) as context:
+            load_settings(self.config_file)
 
-        # Settings should still have defaults
-        self.assertEqual(self.settings.get('model_dir'), 'models')
+        self.assertIn("does not exist", str(context.exception))
 
     def test_save_and_load(self):
         """Test saving and loading settings."""
-        # Change some settings
-        self.settings.set('spreadsheet_id', 'test_id')
-        self.settings.set('credentials_file', '/path/to/creds.json')
+        # Create test settings
+        test_settings = {
+            'spreadsheet_id': 'test_id',
+            'credentials_file': self.credentials_file
+        }
 
-        # Check that file was created
-        self.assertTrue(os.path.exists(self.config_file))
+        # Write settings to file manually
+        os.makedirs(os.path.dirname(self.config_file), exist_ok=True)
+        with open(self.config_file, 'w') as f:
+            json.dump(test_settings, f)
 
-        # Create a new settings instance and load from the same file
-        new_settings = Settings(self.config_file)
+        # Load settings
+        settings = load_settings(self.config_file)
 
-        # Check that settings were loaded correctly
-        self.assertEqual(new_settings.get('spreadsheet_id'), 'test_id')
-        self.assertEqual(new_settings.get('credentials_file'), '/path/to/creds.json')
-        self.assertEqual(new_settings.get('model_dir'), 'models')  # Default should remain
+        # Check settings
+        self.assertEqual(settings['spreadsheet_id'], 'test_id')
+        self.assertEqual(settings['credentials_file'], self.credentials_file)
 
-    def test_set_multiple(self):
-        """Test setting multiple settings at once."""
-        # Set multiple settings
-        new_settings = {
-            'spreadsheet_id': 'new_id',
-            'credentials_file': '/new/path.json',
+    def test_singleton_caching(self):
+        """Test that settings are cached and reused."""
+        # Create test settings
+        test_settings = {
+            'spreadsheet_id': 'test_id',
             'log_level': 'DEBUG'
         }
 
-        result = self.settings.set_multiple(new_settings)
+        # Write settings to file
+        os.makedirs(os.path.dirname(self.config_file), exist_ok=True)
+        with open(self.config_file, 'w') as f:
+            json.dump(test_settings, f)
 
-        # Check result and values
-        self.assertTrue(result)
-        self.assertEqual(self.settings.get('spreadsheet_id'), 'new_id')
-        self.assertEqual(self.settings.get('credentials_file'), '/new/path.json')
-        self.assertEqual(self.settings.get('log_level'), 'DEBUG')
-        self.assertEqual(self.settings.get('model_dir'), 'models')  # Unchanged default
+        # Load settings first time
+        settings1 = load_settings(self.config_file)
+        self.assertEqual(settings1['spreadsheet_id'], 'test_id')
 
-    def test_reset(self):
-        """Test resetting settings to defaults."""
-        # Change some settings
-        self.settings.set('spreadsheet_id', 'test_id')
-        self.settings.set('log_level', 'DEBUG')
+        # Modify file to have different settings
+        modified_settings = {
+            'spreadsheet_id': 'new_id',
+            'log_level': 'INFO'
+        }
+        with open(self.config_file, 'w') as f:
+            json.dump(modified_settings, f)
 
-        # Reset settings
-        result = self.settings.reset()
+        # Load settings again - should get cached version
+        settings2 = load_settings(self.config_file)
+        self.assertEqual(settings2['spreadsheet_id'], 'test_id')  # Still old value
 
-        # Check result and values
-        self.assertTrue(result)
-        self.assertEqual(self.settings.get('spreadsheet_id'), '')  # Back to default
-        self.assertEqual(self.settings.get('log_level'), 'INFO')  # Back to default
-
-    def test_get_with_default(self):
-        """Test getting a setting with a custom default."""
-        # Get a nonexistent setting with a default
-        value = self.settings.get('nonexistent_key', 'default_value')
-
-        # Check that default was returned
-        self.assertEqual(value, 'default_value')
-
-    def test_save_failure(self):
-        """Test save failure handling."""
-        # Mock open to raise an exception
-        with patch('builtins.open', side_effect=PermissionError("Access denied")):
-            result = self.settings.save()
-
-            # Check that result indicates failure
-            self.assertFalse(result)
+        # Force reload - should get new values
+        settings3 = load_settings(self.config_file, force_reload=True)
+        self.assertEqual(settings3['spreadsheet_id'], 'new_id')  # New value
 
     def test_load_invalid_json(self):
         """Test loading invalid JSON."""
         # Write invalid JSON to the config file
+        os.makedirs(os.path.dirname(self.config_file), exist_ok=True)
         with open(self.config_file, 'w') as f:
             f.write('invalid { json')
 
-        # Create a new settings instance and try to load
-        new_settings = Settings(self.config_file)
+        # Load should fail gracefully and return empty dict
+        with self.assertRaises(ValueError) as context:
+            load_settings(self.config_file)
 
-        # Load should fail but not raise exception
-        result = new_settings.load()
-        self.assertFalse(result)
+        self.assertIn("Expecting value: line 1 column 1 (char 0)", str(context.exception))
 
-        # Settings should still have defaults
-        self.assertEqual(new_settings.get('model_dir'), 'models')
+
+    def test_load_missing_required_settings(self):
+        """Test loading settings with missing required keys."""
+        # Create test settings with missing required keys
+        test_settings = {
+            'log_level': 'DEBUG'  # Missing spreadsheet_id and credentials_file
+        }
+
+        # Write settings to file
+        os.makedirs(os.path.dirname(self.config_file), exist_ok=True)
+        with open(self.config_file, 'w') as f:
+            json.dump(test_settings, f)
+
+        # Load should raise ValueError
+        with self.assertRaises(ValueError) as context:
+            load_settings(self.config_file)
+
+        self.assertIn("Missing required settings", str(context.exception))
+
+    def test_load_nonexistent_credentials_file(self):
+        """Test loading settings with a nonexistent credentials file."""
+        # Create test settings with nonexistent credentials file
+        test_settings = {
+            'spreadsheet_id': 'test_id',
+            'credentials_file': '/nonexistent/path.json'
+        }
+
+        # Write settings to file
+        os.makedirs(os.path.dirname(self.config_file), exist_ok=True)
+        with open(self.config_file, 'w') as f:
+            json.dump(test_settings, f)
+
+        # Load should raise ValueError
+        with self.assertRaises(ValueError) as context:
+            load_settings(self.config_file)
+
+        self.assertIn("Credentials file does not exist", str(context.exception))
 
 
 if __name__ == '__main__':
