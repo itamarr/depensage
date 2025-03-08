@@ -12,10 +12,9 @@ from google.oauth2 import service_account
 from googleapiclient.discovery import build
 import logging
 
-from depensage.sheets.sheet_utils import HebrewMonthUtils, find_first_empty_row
+from depensage.sheets.sheet_utils import SheetUtils, find_first_empty_row
 
 logger = logging.getLogger(__name__)
-
 
 class SheetHandler:
     """
@@ -142,7 +141,7 @@ class SheetHandler:
             last_date_str = date_values[-1]
 
             # Parse the date
-            last_date = HebrewMonthUtils.parse_hebrew_date(last_date_str)
+            last_date = SheetUtils.parse_date(last_date_str)
             if not last_date:
                 return datetime(1900, 1, 1)
 
@@ -179,6 +178,29 @@ class SheetHandler:
             sheets = self.get_sheet_metadata()
             template_sheet_id = None
 
+            # If template_name is None, create a blank sheet instead
+            if template_name is None:
+                body = {
+                    'requests': [
+                        {
+                            'addSheet': {
+                                'properties': {
+                                    'title': new_sheet_name
+                                }
+                            }
+                        }
+                    ]
+                }
+
+                self.sheets_service.batchUpdate(
+                    spreadsheetId=self.spreadsheet_id,
+                    body=body
+                ).execute()
+
+                logger.info(f"Created new blank sheet '{new_sheet_name}'")
+                return True
+
+            # Otherwise, copy from template
             for sheet in sheets:
                 if sheet['properties']['title'] == template_name:
                     template_sheet_id = sheet['properties']['sheetId']
@@ -262,7 +284,7 @@ class SheetHandler:
         Returns:
             Name of the month sheet or None if failed.
         """
-        sheet_name = HebrewMonthUtils.get_sheet_name_for_date(date)
+        sheet_name = SheetUtils.get_sheet_name_for_date(date)
 
         if not sheet_name:
             logger.error(f"Could not determine sheet name for date {date}")
@@ -297,13 +319,9 @@ class SheetHandler:
             for sheet in sheets:
                 sheet_name = sheet['properties']['title']
 
-                # Skip non-month sheets
-                if not HebrewMonthUtils.get_month_number(sheet_name) and \
-                        sheet_name != 'Categories' and sheet_name != 'Month Template':
-                    # This might be a year-month sheet (e.g., "ינואר 2023")
-                    sheet_parts = sheet_name.split()
-                    if len(sheet_parts) != 2 or not HebrewMonthUtils.get_month_number(sheet_parts[0]):
-                        continue
+                # Skip non-month sheets and special sheets
+                if sheet_name == 'Categories' or sheet_name == 'Month Template':
+                    continue
 
                 # Get sheet data
                 values = self.get_sheet_values(sheet_name, 'A1:G')
@@ -334,7 +352,7 @@ class SheetHandler:
                         continue
 
                     # Parse date
-                    date = HebrewMonthUtils.parse_hebrew_date(date_str)
+                    date = SheetUtils.parse_date(date_str)
                     if not date:
                         continue
 

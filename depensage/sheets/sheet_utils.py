@@ -1,5 +1,5 @@
 """
-Utility functions for working with sheets and Hebrew date/time formats.
+Utility functions for working with sheets and date/time formats.
 """
 
 from datetime import datetime
@@ -7,46 +7,10 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-
-class HebrewMonthUtils:
+class SheetUtils:
     """
-    Utility class for handling Hebrew month names and conversions.
+    Utility class for handling sheet operations and date conversions.
     """
-
-    # Hebrew month names dictionary
-    HEBREW_MONTHS = {
-        1: 'ינואר', 2: 'פברואר', 3: 'מרץ', 4: 'אפריל', 5: 'מאי', 6: 'יוני',
-        7: 'יולי', 8: 'אוגוסט', 9: 'ספטמבר', 10: 'אוקטובר', 11: 'נובמבר', 12: 'דצמבר'
-    }
-
-    # Reverse mapping for lookup by name
-    MONTH_TO_NUMBER = {v: k for k, v in HEBREW_MONTHS.items()}
-
-    @classmethod
-    def get_hebrew_month_name(cls, month_num):
-        """
-        Get Hebrew month name from month number.
-
-        Args:
-            month_num: Month number (1-12)
-
-        Returns:
-            Hebrew month name or empty string if not found.
-        """
-        return cls.HEBREW_MONTHS.get(month_num, '')
-
-    @classmethod
-    def get_month_number(cls, hebrew_month_name):
-        """
-        Get month number from Hebrew month name.
-
-        Args:
-            hebrew_month_name: Hebrew month name
-
-        Returns:
-            Month number (1-12) or None if not found.
-        """
-        return cls.MONTH_TO_NUMBER.get(hebrew_month_name)
 
     @classmethod
     def get_sheet_name_for_date(cls, date):
@@ -57,15 +21,15 @@ class HebrewMonthUtils:
             date: datetime object
 
         Returns:
-            Sheet name (Hebrew month name)
+            Sheet name (English month name)
         """
-        month_num = date.month
-        return cls.get_hebrew_month_name(month_num)
+        month_name = date.strftime('%B')  # Get the full month name in English
+        return month_name
 
     @classmethod
-    def parse_hebrew_date(cls, date_str):
+    def parse_date(cls, date_str):
         """
-        Parse Hebrew formatted date strings.
+        Parse date strings in various formats.
 
         Args:
             date_str: Date string in various formats
