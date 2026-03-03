@@ -174,3 +174,7 @@ cython_debug/
 
 # PyPI configuration file
 .pypirc
+
+
+# Secrets contain access tokens, SSH keys, Google service keys etc.
+.secrets/
