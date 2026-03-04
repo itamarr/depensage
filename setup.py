@@ -18,8 +18,6 @@ setup(
     install_requires=[
         "pandas>=1.0.0",
         "numpy>=1.18.0",
-        "tensorflow>=2.4.0",
-        "scikit-learn>=0.23.0",
         "google-api-python-client>=2.0.0",
         "google-auth-httplib2>=0.1.0",
         "google-auth-oauthlib>=0.4.0",
