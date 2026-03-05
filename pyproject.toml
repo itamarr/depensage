@@ -1,0 +1,37 @@
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.backends._legacy:_Backend"
+
+[project]
+name = "depensage"
+version = "0.1.0"
+description = "Automated household expense tracking via Google Sheets"
+readme = "README.md"
+requires-python = ">=3.12"
+license = "MIT"
+authors = [
+    { name = "Itamar Rosenfeld Rauch" },
+]
+dependencies = [
+    "pandas>=2.0.0",
+    "numpy>=1.24.0",
+    "google-api-python-client>=2.0.0",
+    "google-auth-httplib2>=0.1.0",
+    "google-auth-oauthlib>=0.4.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "black>=23.0",
+    "flake8>=6.0",
+]
+
+[project.scripts]
+depensage = "depensage.main:main"
+
+[tool.black]
+line-length = 100
+target-version = ["py312"]
+
+[tool.setuptools.packages.find]
+include = ["depensage*"]

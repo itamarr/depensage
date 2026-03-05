@@ -119,4 +119,5 @@ TensorFlow and scikit-learn have been removed from dependencies.
 - Transactions flow as pandas DataFrames with columns: `date`, `business_name`, `amount`, `category`, `subcategory`
 - The spreadsheet is in Hebrew; all category/sub-category names are Hebrew strings
 - Configuration and secrets are stored outside the repo (`.secrets/` for credentials, `~/.depensage/` for config)
+- Commit early and often — small, focused commits that each do one thing
 - Commit messages should be succinct (one short line)

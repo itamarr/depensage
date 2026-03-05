@@ -6,9 +6,7 @@ to process credit card statements and update the tracking spreadsheet.
 """
 
 import logging
-from datetime import datetime
 
-from depensage.classifier.neural_classifier import ExpenseNeuralClassifier
 from depensage.sheets.spreadsheet_handler import SheetHandler
 from depensage.engine.statement_parser import StatementParser
 
@@ -19,31 +17,16 @@ class ExpenseProcessor:
     """
     Main processing engine for expense tracking.
 
-    This class integrates all components of the system:
-    - Statement parsing
-    - Transaction classification
-    - Spreadsheet updating
+    Integrates statement parsing, classification, and spreadsheet updating.
     """
 
-    def __init__(self, spreadsheet_id, credentials_file=None, model_dir='models'):
-        """
-        Initialize the expense processor.
-
-        Args:
-            spreadsheet_id: ID of the Google spreadsheet.
-            credentials_file: Path to Google API credentials file.
-            model_dir: Directory for ML model storage.
-        """
+    def __init__(self, spreadsheet_id, credentials_file=None):
         self.spreadsheet_id = spreadsheet_id
         self.credentials_file = credentials_file
-        self.model_dir = model_dir
 
-        # Initialize components
-        self.classifier = ExpenseNeuralClassifier(model_dir=model_dir)
         self.sheet_handler = SheetHandler(spreadsheet_id)
         self.parser = StatementParser()
 
-        # Authenticate with Google Sheets if credentials are provided
         if credentials_file:
             self.authenticate(credentials_file)
 
@@ -67,40 +50,6 @@ class ExpenseProcessor:
             self.credentials_file = creds_file
 
         return success
-
-    def train_classifier(self, additional_data=None):
-        """
-        Train the classifier using historical data from the spreadsheet.
-
-        Args:
-            additional_data: Additional labeled data to use for training.
-
-        Returns:
-            Training history or None if failed.
-        """
-        try:
-            # Extract historical data from spreadsheet
-            sheet_data = self.sheet_handler.extract_historical_data()
-
-            if sheet_data.empty and (additional_data is None or additional_data.empty):
-                logger.error("No training data available")
-                return None
-
-            # Combine data sources if available
-            if additional_data is not None and not additional_data.empty:
-                training_data = pd.concat([sheet_data, additional_data], ignore_index=True)
-            else:
-                training_data = sheet_data
-
-            # Train the classifier
-            logger.info(f"Training classifier with {len(training_data)} transactions")
-            history = self.classifier.train(training_data)
-
-            return history
-
-        except Exception as e:
-            logger.error(f"Failed to train classifier: {e}")
-            return None
 
     def process_statement(self, primary_file, secondary_file=None):
         """
@@ -130,8 +79,8 @@ class ExpenseProcessor:
                 logger.info("No transactions found in the statements")
                 return True
 
-            # Classify transactions
-            classified_transactions = self.classifier.predict(merged_statement)
+            # TODO: classify transactions using lookup table + LLM fallback
+            classified_transactions = merged_statement
 
             # Group transactions by month
             classified_transactions['month'] = classified_transactions['date'].dt.month
