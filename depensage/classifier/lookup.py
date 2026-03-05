@@ -14,7 +14,9 @@ import pandas as pd
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_LOOKUP_PATH = os.path.join(os.path.expanduser("~"), ".depensage", "lookup.json")
+DEFAULT_LOOKUP_PATH = os.path.join(
+    os.path.dirname(__file__), "..", "..", ".artifacts", "lookup.json"
+)
 
 
 @dataclass

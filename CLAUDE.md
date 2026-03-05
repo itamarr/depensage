@@ -119,6 +119,7 @@ TensorFlow and scikit-learn have been removed from dependencies.
 - Transactions flow as pandas DataFrames with columns: `date`, `business_name`, `amount`, `category`, `subcategory`
 - The spreadsheet is in Hebrew; all category/sub-category names are Hebrew strings
 - Configuration and secrets are stored in `.secrets/` (gitignored): `config.json` for settings, service account JSON for credentials
-- Never hardcode spreadsheet IDs, credentials paths, or anything personally identifiable in committed code — keep it in `.secrets/` or environment variables
+- Generated artifacts (lookup tables, etc.) go in `.artifacts/` (gitignored)
+- Never hardcode spreadsheet IDs, credentials paths, or anything personally identifiable in committed code — keep it in `.secrets/`, `.artifacts/`, or environment variables
 - Commit early and often — small, focused commits that each do one thing
 - Commit messages should be succinct (one short line)

@@ -178,3 +178,6 @@ cython_debug/
 
 # Secrets contain access tokens, SSH keys, Google service keys etc.
 .secrets/
+
+# Generated artifacts (lookup tables, etc.)
+.artifacts/

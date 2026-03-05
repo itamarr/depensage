@@ -134,7 +134,7 @@ def cmd_build_lookup(args):
     }
     classifier.save()
 
-    print(f"Built lookup table with {len(exact)} merchants → {output_path}")
+    print(f"Built lookup table with {len(exact)} merchants → {os.path.abspath(output_path)}")
 
 
 def main():
