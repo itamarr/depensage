@@ -156,3 +156,75 @@ class LookupClassifier:
         """Add a prefix pattern entry and save."""
         self.patterns.append((prefix, Classification(category=category, subcategory=subcategory)))
         self.save()
+
+    def remove_exact(self, merchant_name: str):
+        """Remove an exact match entry (does not save automatically)."""
+        self.exact.pop(merchant_name, None)
+
+    def consolidate_patterns(self, min_prefix_len=5, min_group_size=2):
+        """
+        Find exact entries that share a common prefix and could be patterns.
+
+        Returns a list of groups:
+        [{"prefix": str, "category": str, "subcategory": str, "merchants": [str]}]
+
+        Only groups where all members share the same (category, subcategory) are returned.
+        """
+        from collections import defaultdict
+
+        # Group exact entries by (category, subcategory)
+        by_classification = defaultdict(list)
+        for name, cls in self.exact.items():
+            by_classification[(cls.category, cls.subcategory)].append(name)
+
+        groups = []
+        for (category, subcategory), names in by_classification.items():
+            if len(names) < min_group_size:
+                continue
+
+            # Find clusters sharing a common prefix of min_prefix_len+ chars
+            used = set()
+            for i, name_a in enumerate(names):
+                if name_a in used:
+                    continue
+                cluster = [name_a]
+                # Find the common prefix between name_a and all other names
+                prefix = name_a
+                for name_b in names[i + 1:]:
+                    if name_b in used:
+                        continue
+                    # Compute common prefix
+                    common = os.path.commonprefix([prefix, name_b])
+                    if len(common) >= min_prefix_len:
+                        prefix = common
+                        cluster.append(name_b)
+
+                if len(cluster) >= min_group_size:
+                    # Trim trailing whitespace from prefix
+                    prefix = prefix.rstrip()
+                    groups.append({
+                        "prefix": prefix,
+                        "category": category,
+                        "subcategory": subcategory,
+                        "merchants": cluster,
+                    })
+                    used.update(cluster)
+
+        # Sort by number of merchants (largest groups first)
+        groups.sort(key=lambda g: len(g["merchants"]), reverse=True)
+        return groups
+
+    def apply_pattern_group(self, group):
+        """Convert a group of exact entries into a prefix pattern."""
+        for merchant in group["merchants"]:
+            self.remove_exact(merchant)
+        # Avoid duplicate patterns
+        prefix_lower = group["prefix"].lower()
+        for existing_prefix, _ in self.patterns:
+            if existing_prefix.lower() == prefix_lower:
+                return
+        self.patterns.append((
+            group["prefix"],
+            Classification(category=group["category"], subcategory=group["subcategory"]),
+        ))
+        self.save()

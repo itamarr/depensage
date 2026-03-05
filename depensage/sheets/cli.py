@@ -160,8 +160,8 @@ def fetch_categories(handler):
     return categories
 
 
-def prompt_category(merchant, amount, date, categories):
-    """Interactively prompt user to classify a merchant. Returns (category, subcategory) or None to skip."""
+def prompt_category(merchant, amount, date, categories, allow_back=False):
+    """Interactively prompt user to classify a merchant. Returns (category, subcategory), None to skip, 'quit', or 'back'."""
     cat_list = list(categories.keys())
 
     print(f"\n  Merchant: {merchant}")
@@ -170,6 +170,99 @@ def prompt_category(merchant, amount, date, categories):
     for i, cat in enumerate(cat_list, 1):
         print(f"    {i:2d}. {cat}")
     print(f"    {'s':>2s}. Skip")
+    if allow_back:
+        print(f"    {'b':>2s}. Back (undo previous)")
+    print(f"    {'q':>2s}. Quit review")
+
+    while True:
+        choice = input("\n  Category #: ").strip()
+        if choice.lower() == 's':
+            return None
+        if choice.lower() == 'b' and allow_back:
+            return "back"
+        if choice.lower() == 'q':
+            return "quit"
+        try:
+            idx = int(choice) - 1
+            if 0 <= idx < len(cat_list):
+                break
+        except ValueError:
+            pass
+        print("  Invalid choice, try again.")
+
+    category = cat_list[idx]
+    subcategory = ""
+
+    subcats = categories[category]
+    if subcats:
+        print(f"\n  Subcategories for {category}:")
+        for i, sub in enumerate(subcats, 1):
+            print(f"    {i:2d}. {sub}")
+        print(f"    {'0':>2s}. (none)")
+
+        while True:
+            choice = input("\n  Subcategory #: ").strip()
+            try:
+                idx = int(choice)
+                if idx == 0:
+                    break
+                if 1 <= idx <= len(subcats):
+                    subcategory = subcats[idx - 1]
+                    break
+            except ValueError:
+                pass
+            print("  Invalid choice, try again.")
+
+    return (category, subcategory)
+
+
+def find_prefix_groups(merchants, min_prefix_len=5, min_group_size=2):
+    """
+    Find groups of merchant names sharing a common prefix.
+
+    Returns list of {"prefix": str, "merchants": [str]}.
+    """
+    names = list(merchants)
+    used = set()
+    groups = []
+
+    for i, name_a in enumerate(names):
+        if name_a in used:
+            continue
+        cluster = [name_a]
+        prefix = name_a
+        for name_b in names[i + 1:]:
+            if name_b in used:
+                continue
+            common = os.path.commonprefix([prefix, name_b])
+            if len(common) >= min_prefix_len:
+                prefix = common
+                cluster.append(name_b)
+
+        if len(cluster) >= min_group_size:
+            groups.append({
+                "prefix": prefix.rstrip(),
+                "merchants": cluster,
+            })
+            used.update(cluster)
+
+    return groups
+
+
+def prompt_prefix_group(group, categories):
+    """Prompt user to classify a prefix group. Returns (category, subcategory), None to skip, or 'quit'."""
+    print(f"\n  Prefix group: {group['prefix']}*")
+    print(f"  Matches ({len(group['merchants'])}):")
+    for m in group["merchants"][:5]:
+        print(f"    - {m}")
+    if len(group["merchants"]) > 5:
+        print(f"    ... and {len(group['merchants']) - 5} more")
+
+    cat_list = list(categories.keys())
+    print()
+    for i, cat in enumerate(cat_list, 1):
+        print(f"    {i:2d}. {cat}")
+    print(f"    {'s':>2s}. Skip (classify individually)")
     print(f"    {'q':>2s}. Quit review")
 
     while True:
@@ -236,32 +329,118 @@ def cmd_review(args):
         print("Nothing to review!")
         return
 
-    # Deduplicate by merchant name — only ask once per unique merchant
-    unique_merchants = result.unclassified.drop_duplicates(subset="business_name")
+    # Deduplicate by merchant name
+    unique_names = result.unclassified["business_name"].unique().tolist()
 
-    print(f"Unique unknown merchants: {len(unique_merchants)}")
-    reviewed = 0
+    # Phase 1: Find prefix groups among unknowns
+    prefix_groups = find_prefix_groups(unique_names)
+    grouped_names = set()
 
-    for _, row in unique_merchants.iterrows():
-        choice = prompt_category(
-            row["business_name"],
-            row["amount"],
-            row["date"].strftime("%Y-%m-%d") if hasattr(row["date"], "strftime") else str(row["date"]),
-            categories,
-        )
+    if prefix_groups:
+        print(f"\nFound {len(prefix_groups)} prefix group(s):")
+        quit_requested = False
+        for group in prefix_groups:
+            choice = prompt_prefix_group(group, categories)
+
+            if choice == "quit":
+                quit_requested = True
+                break
+            if choice is None:
+                continue
+
+            category, subcategory = choice
+            classifier.add_pattern(group["prefix"], category, subcategory)
+            grouped_names.update(group["merchants"])
+            print(f"  → Saved pattern: {group['prefix']}* → {category}" +
+                  (f" / {subcategory}" if subcategory else ""))
+
+        if quit_requested:
+            print(f"\nLookup table updated.")
+            return
+
+    # Phase 2: Review remaining merchants one by one with undo support
+    remaining = [n for n in unique_names if n not in grouped_names]
+    # Build a list of (name, sample_row) for display
+    remaining_items = []
+    for name in remaining:
+        row = result.unclassified[result.unclassified["business_name"] == name].iloc[0]
+        remaining_items.append((name, row))
+
+    if not remaining_items:
+        print(f"\nAll merchants handled via prefix groups. Lookup table updated.")
+        return
+
+    print(f"\nRemaining individual merchants: {len(remaining_items)}")
+    # history tracks (merchant_name, category, subcategory) for undo
+    history = []
+    i = 0
+
+    while i < len(remaining_items):
+        name, row = remaining_items[i]
+        date_str = row["date"].strftime("%Y-%m-%d") if hasattr(row["date"], "strftime") else str(row["date"])
+
+        choice = prompt_category(name, row["amount"], date_str, categories, allow_back=i > 0)
 
         if choice == "quit":
             break
+        if choice == "back":
+            # Undo last classification
+            prev_name, prev_cat, prev_sub = history.pop()
+            classifier.remove_exact(prev_name)
+            classifier.save()
+            print(f"  ← Undid: {prev_name}")
+            i -= 1
+            continue
         if choice is None:
+            i += 1
             continue
 
         category, subcategory = choice
-        classifier.add_exact(row["business_name"], category, subcategory)
-        reviewed += 1
-        print(f"  → Saved: {row['business_name']} → {category}" +
+        classifier.add_exact(name, category, subcategory)
+        history.append((name, category, subcategory))
+        print(f"  → Saved: {name} → {category}" +
               (f" / {subcategory}" if subcategory else ""))
+        i += 1
 
+    reviewed = len(grouped_names) + len(history)
     print(f"\nReviewed {reviewed} merchants. Lookup table updated.")
+
+
+def cmd_consolidate_patterns(args):
+    """Find duplicate exact entries that should be prefix patterns."""
+    classifier = LookupClassifier()
+    groups = classifier.consolidate_patterns()
+
+    if not groups:
+        print("No pattern candidates found.")
+        return
+
+    print(f"\nFound {len(groups)} pattern candidate(s):\n")
+
+    applied = 0
+    for group in groups:
+        print(f"  Prefix: {group['prefix']}*")
+        print(f"  Category: {group['category']}" +
+              (f" / {group['subcategory']}" if group['subcategory'] else ""))
+        print(f"  Merchants ({len(group['merchants'])}):")
+        for m in group["merchants"]:
+            print(f"    - {m}")
+
+        while True:
+            choice = input("\n  Convert to pattern? (y)es / (n)o / (q)uit: ").strip().lower()
+            if choice in ('y', 'n', 'q'):
+                break
+            print("  Invalid choice.")
+
+        if choice == 'q':
+            break
+        if choice == 'y':
+            classifier.apply_pattern_group(group)
+            applied += 1
+            print(f"  → Converted to pattern: {group['prefix']}*")
+        print()
+
+    print(f"Applied {applied} pattern(s). Lookup table updated.")
 
 
 def main():
@@ -295,6 +474,11 @@ def main():
     )
     review_parser.add_argument("statement", help="Path to CC statement CSV file")
 
+    subparsers.add_parser(
+        "consolidate-patterns",
+        help="Find duplicate exact entries that should be prefix patterns",
+    )
+
     args = parser.parse_args()
     if not args.command:
         parser.print_help()
@@ -307,6 +491,7 @@ def main():
         "metadata": cmd_metadata,
         "build-lookup": cmd_build_lookup,
         "review": cmd_review,
+        "consolidate-patterns": cmd_consolidate_patterns,
     }
     commands[args.command](args)
 
