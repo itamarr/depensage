@@ -41,7 +41,7 @@ class TestSettings(unittest.TestCase):
 
         # Test default path
         default_path = get_config_path()
-        self.assertTrue(default_path.endswith('/.depensage/config.json'))
+        self.assertTrue(default_path.endswith('.secrets/config.json'))
 
     def test_load_nonexistent_file(self):
         """Test loading from a nonexistent file."""
@@ -79,6 +79,7 @@ class TestSettings(unittest.TestCase):
         # Create test settings
         test_settings = {
             'spreadsheet_id': 'test_id',
+            'credentials_file': self.credentials_file,
             'log_level': 'DEBUG'
         }
 
@@ -94,6 +95,7 @@ class TestSettings(unittest.TestCase):
         # Modify file to have different settings
         modified_settings = {
             'spreadsheet_id': 'new_id',
+            'credentials_file': self.credentials_file,
             'log_level': 'INFO'
         }
         with open(self.config_file, 'w') as f:

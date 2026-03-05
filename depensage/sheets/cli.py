@@ -6,26 +6,24 @@ Usage:
     python -m depensage.sheets.cli read <sheet> <range>
     python -m depensage.sheets.cli formulas <sheet> <range>
     python -m depensage.sheets.cli metadata
+    python -m depensage.sheets.cli build-lookup [--output PATH]
 """
 
 import argparse
+from collections import Counter
 import json
 import os
 import sys
 
+from depensage.classifier.lookup import Classification, LookupClassifier, DEFAULT_LOOKUP_PATH
+from depensage.config.settings import load_settings
 from depensage.sheets.spreadsheet_handler import SheetHandler
 
 
-# Defaults - override with --spreadsheet-id and --credentials
-DEFAULT_SPREADSHEET_ID = "1UI01PHhvcVrw5SkWATUMEX3kkiqxS1htL006gQn_bpk"
-DEFAULT_CREDENTIALS = os.path.join(
-    os.path.dirname(__file__), "..", "..", ".secrets", "depensage-0560a8b53051.json"
-)
-
-
 def get_handler(args):
-    spreadsheet_id = args.spreadsheet_id or DEFAULT_SPREADSHEET_ID
-    credentials = args.credentials or DEFAULT_CREDENTIALS
+    settings = load_settings()
+    spreadsheet_id = args.spreadsheet_id or settings["spreadsheet_id"]
+    credentials = args.credentials or settings["credentials_file"]
     credentials = os.path.abspath(credentials)
 
     handler = SheetHandler(spreadsheet_id)
@@ -81,6 +79,64 @@ def cmd_metadata(args):
     print(json.dumps(sheets, indent=2, default=str))
 
 
+MONTH_SHEETS = [
+    "January", "February", "March", "April", "May", "June",
+    "July", "August", "September", "October", "November", "December",
+]
+
+
+def cmd_build_lookup(args):
+    handler = get_handler(args)
+    output_path = args.output or DEFAULT_LOOKUP_PATH
+
+    # Collect (merchant -> list of (category, subcategory)) across all months
+    merchant_categories: dict[str, list[tuple[str, str]]] = {}
+
+    for month in MONTH_SHEETS:
+        # Read columns B (business name), D (subcategory), F (category) — rows 2-130
+        values = handler.get_sheet_values(month, "B2:G130")
+        if not values:
+            continue
+
+        for row in values:
+            # Row is relative to B column: B=0, C=1, D=2, E=3, F=4, G=5
+            if len(row) < 5:
+                continue
+            business_name = row[0].strip() if row[0] else ""
+            subcategory = row[2].strip() if len(row) > 2 and row[2] else ""
+            category = row[4].strip() if len(row) > 4 and row[4] else ""
+
+            if not business_name or not category:
+                continue
+
+            # Skip header rows that leaked through
+            if category in ("קטגוריה", "תת קטגוריה"):
+                continue
+
+            merchant_categories.setdefault(business_name, []).append(
+                (category, subcategory)
+            )
+
+    # For each merchant, pick the most frequent (category, subcategory) pair
+    exact = {}
+    for merchant, pairs in merchant_categories.items():
+        most_common = Counter(pairs).most_common(1)[0][0]
+        exact[merchant] = {
+            "category": most_common[0],
+            "subcategory": most_common[1],
+        }
+
+    # Load existing lookup to preserve patterns, then merge exact entries
+    classifier = LookupClassifier(lookup_path=output_path)
+    classifier.exact = {
+        name: Classification(category=entry["category"], subcategory=entry["subcategory"])
+        for name, entry in exact.items()
+    }
+    classifier.save()
+
+    print(f"Built lookup table with {len(exact)} merchants → {output_path}")
+
+
 def main():
     parser = argparse.ArgumentParser(description="DepenSage Sheets CLI")
     parser.add_argument("--spreadsheet-id", help="Google Spreadsheet ID")
@@ -100,6 +156,13 @@ def main():
 
     subparsers.add_parser("metadata", help="Full sheet metadata as JSON")
 
+    build_lookup_parser = subparsers.add_parser(
+        "build-lookup", help="Build lookup table from historical sheet data"
+    )
+    build_lookup_parser.add_argument(
+        "--output", help=f"Output path (default: {DEFAULT_LOOKUP_PATH})"
+    )
+
     args = parser.parse_args()
     if not args.command:
         parser.print_help()
@@ -110,6 +173,7 @@ def main():
         "read": cmd_read,
         "formulas": cmd_formulas,
         "metadata": cmd_metadata,
+        "build-lookup": cmd_build_lookup,
     }
     commands[args.command](args)
 

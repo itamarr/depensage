@@ -17,12 +17,17 @@ _settings_cache = None
 # Required settings keys
 REQUIRED_SETTINGS = ['spreadsheet_id', 'credentials_file']
 
+DEFAULT_CONFIG_PATH = os.path.join(
+    os.path.dirname(__file__), '..', '..', '.secrets', 'config.json'
+)
+
+
 def get_config_path(config_file=None):
     """
     Get the path to the configuration file.
 
     Args:
-        config_file: Path to configuration file (default: ~/.depensage/config.json)
+        config_file: Path to configuration file (default: .secrets/config.json)
 
     Returns:
         Path to configuration file
@@ -30,9 +35,7 @@ def get_config_path(config_file=None):
     if config_file:
         return config_file
 
-    home_dir = str(Path.home())
-    config_dir = os.path.join(home_dir, '.depensage')
-    return os.path.join(config_dir, 'config.json')
+    return os.path.abspath(DEFAULT_CONFIG_PATH)
 
 def load_settings(config_file=None, force_reload=False):
     """
