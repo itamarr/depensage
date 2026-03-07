@@ -406,6 +406,37 @@ def cmd_review(args):
     print(f"\nReviewed {reviewed} merchants. Lookup table updated.")
 
 
+def cmd_process(args):
+    """Process CC statement files through the automated pipeline."""
+    from depensage.engine.pipeline import run_pipeline
+
+    handler = get_handler(args)
+    classifier = LookupClassifier()
+
+    paths = args.statements
+    for p in paths:
+        if not os.path.exists(p):
+            print(f"File not found: {p}", file=sys.stderr)
+            sys.exit(1)
+
+    result = run_pipeline(paths, handler, classifier)
+
+    print(f"\nPipeline complete:")
+    print(f"  Parsed:     {result.total_parsed}")
+    print(f"  Pending:    {result.pending_skipped} (skipped)")
+    print(f"  Classified: {result.classified}")
+    print(f"  Unknown:    {result.unclassified}")
+    print()
+
+    for mr in result.months:
+        print(f"  {mr.month}: {mr.written} written, {mr.duplicates} duplicates")
+
+    if result.unclassified_merchants:
+        print(f"\n  Unclassified merchants ({len(result.unclassified_merchants)}):")
+        for name in result.unclassified_merchants:
+            print(f"    - {name}")
+
+
 def cmd_consolidate_patterns(args):
     """Find duplicate exact entries that should be prefix patterns."""
     classifier = LookupClassifier()
@@ -474,6 +505,13 @@ def main():
     )
     review_parser.add_argument("statement", help="Path to CC statement CSV file")
 
+    process_parser = subparsers.add_parser(
+        "process", help="Process CC statements through the automated pipeline"
+    )
+    process_parser.add_argument(
+        "statements", nargs="+", help="Path(s) to CC statement file(s)"
+    )
+
     subparsers.add_parser(
         "consolidate-patterns",
         help="Find duplicate exact entries that should be prefix patterns",
@@ -491,6 +529,7 @@ def main():
         "metadata": cmd_metadata,
         "build-lookup": cmd_build_lookup,
         "review": cmd_review,
+        "process": cmd_process,
         "consolidate-patterns": cmd_consolidate_patterns,
     }
     commands[args.command](args)

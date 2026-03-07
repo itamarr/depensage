@@ -16,6 +16,9 @@ from depensage.sheets.sheet_utils import SheetUtils, find_first_empty_row
 
 logger = logging.getLogger(__name__)
 
+EXPENSE_END_MARKER = "---END---"
+
+
 class SheetHandler:
     """
     Handles interaction with Google Sheets for expense tracking.
@@ -297,6 +300,163 @@ class SheetHandler:
 
         return sheet_name
 
+    def get_sheet_id(self, sheet_name):
+        """Get numeric sheet ID from metadata.
+
+        Args:
+            sheet_name: Name of the sheet.
+
+        Returns:
+            Integer sheet ID, or None if not found.
+        """
+        sheets = self.get_sheet_metadata()
+        if not sheets:
+            return None
+        for sheet in sheets:
+            if sheet['properties']['title'] == sheet_name:
+                return sheet['properties']['sheetId']
+        return None
+
+    def find_expense_end_row(self, sheet_name):
+        """Find the row containing EXPENSE_END_MARKER in column B.
+
+        Returns:
+            1-based row number, or None if not found.
+        """
+        values = self.get_sheet_values(sheet_name, 'B1:B200')
+        if not values:
+            return None
+        for i, row in enumerate(values):
+            if row and row[0] == EXPENSE_END_MARKER:
+                return i + 1  # 1-based
+        return None
+
+    def read_expense_rows(self, sheet_name):
+        """Read expense data rows (B2 to the row before the marker).
+
+        Returns:
+            List of rows, each a list of strings [business_name, notes,
+            subcategory, amount, category, date]. Returns empty list
+            if marker not found.
+        """
+        marker_row = self.find_expense_end_row(sheet_name)
+        if not marker_row or marker_row <= 2:
+            return []
+        last_data_row = marker_row - 1
+        values = self.get_sheet_values(sheet_name, f'B2:G{last_data_row}')
+        return values or []
+
+    def find_first_empty_expense_row(self, sheet_name):
+        """Find first empty row between row 2 and the marker.
+
+        Scans column G (date) since every expense has a date.
+
+        Returns:
+            1-based row number, or None if marker not found.
+        """
+        marker_row = self.find_expense_end_row(sheet_name)
+        if not marker_row:
+            return None
+        # Read dates from G2 to G{marker_row-1}
+        last_data_row = marker_row - 1
+        if last_data_row < 2:
+            return 2
+        values = self.get_sheet_values(sheet_name, f'G2:G{last_data_row}')
+        if not values:
+            return 2
+        # Find first empty cell
+        for i, row in enumerate(values):
+            if not row or not row[0]:
+                return i + 2  # 1-based, offset by header row
+        # All rows filled — next row after data
+        return len(values) + 2
+
+    def insert_rows(self, sheet_name, row_index, count):
+        """Insert empty rows at the given position.
+
+        Uses batchUpdate insertDimension with inheritFromBefore=True.
+
+        Args:
+            sheet_name: Name of the sheet.
+            row_index: 1-based row index where rows will be inserted.
+            count: Number of rows to insert.
+
+        Returns:
+            True if successful, False otherwise.
+        """
+        try:
+            if not self.sheets_service:
+                logger.error("Sheets service not initialized.")
+                return False
+
+            sheet_id = self.get_sheet_id(sheet_name)
+            if sheet_id is None:
+                logger.error(f"Sheet '{sheet_name}' not found")
+                return False
+
+            body = {
+                'requests': [{
+                    'insertDimension': {
+                        'range': {
+                            'sheetId': sheet_id,
+                            'dimension': 'ROWS',
+                            'startIndex': row_index - 1,  # 0-based
+                            'endIndex': row_index - 1 + count,
+                        },
+                        'inheritFromBefore': True,
+                    }
+                }]
+            }
+
+            self.sheets_service.batchUpdate(
+                spreadsheetId=self.spreadsheet_id,
+                body=body,
+            ).execute()
+
+            logger.info(f"Inserted {count} rows at row {row_index} in {sheet_name}")
+            return True
+
+        except Exception as e:
+            logger.error(f"Failed to insert rows: {e}")
+            return False
+
+    def write_expense_rows(self, sheet_name, start_row, rows):
+        """Write expense rows to columns B–G.
+
+        Args:
+            sheet_name: Name of the sheet.
+            start_row: 1-based row to start writing.
+            rows: List of 6-element lists [B, C, D, E, F, G].
+
+        Returns:
+            True if successful, False otherwise.
+        """
+        try:
+            if not self.sheets_service:
+                logger.error("Sheets service not initialized.")
+                return False
+
+            if not rows:
+                return True
+
+            end_row = start_row + len(rows) - 1
+            range_str = f'{sheet_name}!B{start_row}:G{end_row}'
+
+            body = {'values': rows}
+            result = self.sheets_service.values().update(
+                spreadsheetId=self.spreadsheet_id,
+                range=range_str,
+                valueInputOption='USER_ENTERED',
+                body=body,
+            ).execute()
+
+            logger.info(f"Wrote {result.get('updatedCells')} cells to {range_str}")
+            return True
+
+        except Exception as e:
+            logger.error(f"Failed to write expense rows: {e}")
+            return False
+
     def extract_historical_data(self):
         """
         Extract historical transaction data from all month sheets.
@@ -339,7 +499,7 @@ class SheetHandler:
                     amount = row[4] if len(row) > 4 and row[4] else "0"
                     category = row[5] if len(row) > 5 and row[5] else ""
                     subcategory = row[3] if len(row) > 3 and row[3] else ""
-                    business_name = ""  # Not stored in sheet
+                    business_name = row[1] if len(row) > 1 and row[1] else ""
 
                     # Clean amount
                     amount = amount.replace('₪', '').replace(',', '').strip()

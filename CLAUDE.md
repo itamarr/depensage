@@ -29,18 +29,31 @@ flake8 depensage/
 black depensage/
 ```
 
-## Sheets CLI (Development Tool)
+## CLI
 
-A CLI for inspecting and interacting with the Google Sheet during development:
+The main interface for DepenSage:
 
 ```bash
+# Process CC statements (the main pipeline)
+python -m depensage.sheets.cli process statement1.xlsx [statement2.xlsx ...]
+
+# Review unknown merchants interactively
+python -m depensage.sheets.cli review statement.xlsx
+
+# Build lookup table from historical sheet data
+python -m depensage.sheets.cli build-lookup [--output PATH]
+
+# Consolidate exact entries into prefix patterns
+python -m depensage.sheets.cli consolidate-patterns
+
+# Sheet inspection (development)
 python -m depensage.sheets.cli list-sheets
 python -m depensage.sheets.cli read <sheet> <range>
 python -m depensage.sheets.cli formulas <sheet> <range>
 python -m depensage.sheets.cli metadata
 ```
 
-Defaults are configured in `depensage/sheets/cli.py` (playground spreadsheet ID and credentials path). Override with `--spreadsheet-id` and `--credentials` flags. Credentials (service account JSON key) live in `.secrets/` (gitignored).
+Override defaults with `--spreadsheet-id` and `--credentials` flags. Credentials (service account JSON key) live in `.secrets/` (gitignored).
 
 **Use subagents when reading sheet data** to avoid bloating the main context window with raw spreadsheet content. The subagent runs CLI commands, processes the data, and returns only a concise summary.
 
@@ -79,23 +92,33 @@ Expenses highlighted green have been charged to the bank account. Non-green expe
 ### Category List (Hebrew → English)
 חשבונות (Bills), בריאות (Health), אלוני (Aloni — child), צ'ופי (Chuppy — dog), עסק (Business — closed), שונות (Miscellaneous — has many sub-categories with individual budgets), סופר (Supermarket), נסיעות (Transportation), בילויים וביזבוזים (Entertainment), משכנתא (Mortgage), שכר דירה (Rent), חסכון (Savings), טיפול (Therapy), יוגה (Yoga)
 
-## Architecture (Current State)
+## Architecture
 
-The codebase was scaffolded about a year ago and is being rethought. Key decisions:
+### 3-Layer Design
+Core library (no I/O, no prompts) → CLI (dev/testing) → web app (end product). All business logic lives in core modules. CLI and future web app are thin wrappers.
 
-### Classification: Lookup Table + LLM (replacing Neural Network)
-The original TensorFlow neural classifier (`classifier/` module) is being replaced. The new approach:
-1. **Exact/fuzzy lookup table** built from historical sheet data (merchant name → category). Handles ~80-90% of transactions.
-2. **LLM fallback** for unknown merchants — a single API call with merchant name, amount, and category list. The LLM integration should be generic (not locked to a specific provider).
-3. **Human review** for low-confidence results, feeding back into the lookup table.
+### Classification: Lookup Table + Human Review
+1. **Exact/prefix lookup table** built from historical sheet data (merchant name → category). Handles ~80-90% of transactions.
+2. **Human review** for unknown merchants via CLI (`review` command), feeding back into the lookup table.
+3. Unclassified transactions are written to the sheet with empty categories — they can be categorized later.
 
-TensorFlow and scikit-learn have been removed from dependencies.
+### Automated Pipeline
+`engine/pipeline.py` → `run_pipeline()` orchestrates the full flow:
+1. Parse Excel CC statements (`StatementParser`)
+2. Filter pending transactions (no charge date = still on credit card)
+3. Classify via `LookupClassifier` (exact + prefix pattern matching)
+4. Deduplicate against existing sheet data (`engine/dedup.py`)
+5. Format rows for columns B–G (`engine/formatter.py`)
+6. Insert rows if expense section is full, write to correct monthly sheet
 
-### Existing Modules
-- **`sheets/`** — Google Sheets API integration via service account. `SheetHandler` handles auth, read, write, metadata, template-based sheet creation. `cli.py` is the development CLI.
-- **`engine/`** — `ExpenseProcessor` orchestrates the pipeline; `StatementParser` parses CSV/Excel credit card statements.
-- **`config/`** — Settings loaded from `~/.depensage/config.json`. Singleton pattern.
-- **`classifier/`** — Legacy neural classifier (to be replaced).
+Expense section boundary is marked by `---END---` in column B (at the totals row). Migration script: `scripts/plant_markers.py`.
+
+### Modules
+- **`engine/`** — `StatementParser` (Excel only), `pipeline.py` (orchestrator), `dedup.py`, `formatter.py`
+- **`classifier/`** — `LookupClassifier` with exact matches and prefix patterns, persisted to `.artifacts/lookup.json`
+- **`sheets/`** — `SheetHandler` (Google Sheets API: auth, read, write, metadata, row insertion, marker detection). `cli.py` is the CLI.
+- **`config/`** — Settings loaded from `.secrets/config.json`
+- **`scripts/`** — One-time migration scripts
 
 ### Key Pain Points to Automate
 1. **Data entry** — parsing CC statements and writing to the correct monthly sheet with classified categories
