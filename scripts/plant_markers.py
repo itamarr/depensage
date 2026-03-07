@@ -57,10 +57,13 @@ def main():
     parser = argparse.ArgumentParser(description="Plant expense end markers")
     parser.add_argument("--dry-run", action="store_true",
                         help="Show what would be done without making changes")
+    parser.add_argument("--year", required=True,
+                        help="Year to operate on (e.g. 2026)")
     args = parser.parse_args()
 
     settings = load_settings()
-    spreadsheet_id = settings["spreadsheet_id"]
+    from depensage.config.settings import get_spreadsheet_id
+    spreadsheet_id = get_spreadsheet_id(args.year, settings)
     credentials = os.path.abspath(settings["credentials_file"])
 
     handler = SheetHandler(spreadsheet_id)

@@ -143,6 +143,7 @@ Expense section boundary is marked by `---END---` in column B (at the totals row
 - Tests use `unittest`, located in `<module>/tests/` subdirectories
 - External dependencies (Google Sheets API) are mocked in tests
 - Transactions flow as pandas DataFrames with columns: `date`, `business_name`, `amount`, `category`, `subcategory`
+- Sheet dates are serial numbers (days since 1899-12-30) when read with `UNFORMATTED_VALUE`. Dedup and `read_expense_rows` handle this.
 - The spreadsheet is in Hebrew; all category/sub-category names are Hebrew strings
 - Configuration and secrets are stored in `.secrets/` (gitignored): `config.json` for settings, service account JSON for credentials
 - Generated artifacts (lookup tables, etc.) go in `.artifacts/` (gitignored)

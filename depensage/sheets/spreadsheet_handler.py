@@ -334,17 +334,28 @@ class SheetHandler:
     def read_expense_rows(self, sheet_name):
         """Read expense data rows (B2 to the row before the marker).
 
+        Uses UNFORMATTED_VALUE so dates come as serial numbers and
+        amounts as raw numbers rather than locale-formatted strings.
+
         Returns:
-            List of rows, each a list of strings [business_name, notes,
-            subcategory, amount, category, date]. Returns empty list
-            if marker not found.
+            List of rows, each a list [business_name, notes,
+            subcategory, amount, category, date_serial]. Returns empty
+            list if marker not found.
         """
         marker_row = self.find_expense_end_row(sheet_name)
         if not marker_row or marker_row <= 2:
             return []
         last_data_row = marker_row - 1
-        values = self.get_sheet_values(sheet_name, f'B2:G{last_data_row}')
-        return values or []
+        try:
+            result = self.sheets_service.values().get(
+                spreadsheetId=self.spreadsheet_id,
+                range=f'{sheet_name}!B2:G{last_data_row}',
+                valueRenderOption='UNFORMATTED_VALUE',
+            ).execute()
+            return result.get('values', [])
+        except Exception as e:
+            logger.error(f"Failed to read expense rows from {sheet_name}: {e}")
+            return []
 
     def find_first_empty_expense_row(self, sheet_name):
         """Find first empty row between row 2 and the marker.

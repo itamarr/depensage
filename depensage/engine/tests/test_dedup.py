@@ -93,6 +93,41 @@ class TestDeduplicate(unittest.TestCase):
         result = deduplicate(new, existing)
         self.assertEqual(len(result), 0)
 
+    def test_serial_number_dates(self):
+        """Existing rows with serial number dates (from UNFORMATTED_VALUE)."""
+        new = self._make_df([
+            ("2026-01-01", "Shop A", 100.50),
+        ])
+        # 46023 = Jan 1, 2026 as a Sheets serial number
+        existing = [
+            ["Shop A", "", "", 100.50, "Food", 46023],
+        ]
+        result = deduplicate(new, existing)
+        self.assertEqual(len(result), 0)
+
+    def test_serial_number_no_false_match(self):
+        """Serial number date that doesn't match incoming transaction."""
+        new = self._make_df([
+            ("2026-01-02", "Shop A", 100.50),
+        ])
+        # 46023 = Jan 1, 2026 — different day
+        existing = [
+            ["Shop A", "", "", 100.50, "Food", 46023],
+        ]
+        result = deduplicate(new, existing)
+        self.assertEqual(len(result), 1)
+
+    def test_numeric_amount_from_unformatted(self):
+        """Amounts as raw numbers (int/float) from UNFORMATTED_VALUE."""
+        new = self._make_df([
+            ("2026-01-01", "Shop A", 279.0),
+        ])
+        existing = [
+            ["Shop A", "", "", 279, "Food", 46023],
+        ]
+        result = deduplicate(new, existing)
+        self.assertEqual(len(result), 0)
+
 
 if __name__ == "__main__":
     unittest.main()
