@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs/banner.png" alt="DepenSage" width="600">
+</p>
+
 # DepenSage
 
 *Automated household expense tracking for Google Sheets*
@@ -49,9 +53,9 @@ DepenSage (from French "dépense" meaning expense + "sage" meaning wise) automat
    }
    ```
 
-4. **Plant markers** (one-time, adds `---END---` boundary markers to existing month sheets):
+4. **Plant section markers** (one-time, for sheets predating the template update):
    ```bash
-   python scripts/plant_markers.py
+   python scripts/plant_section_markers.py --year 2026
    ```
 
 ## Usage
@@ -84,6 +88,12 @@ python -m depensage.sheets.cli --year 2025 build-lookup
 python -m depensage.sheets.cli consolidate-patterns
 ```
 
+### Manual carryover between months
+
+```bash
+python -m depensage.sheets.cli carryover December January --source-year 2025 --dest-year 2026
+```
+
 ### Inspect sheets (development)
 
 ```bash
@@ -94,7 +104,7 @@ python -m depensage.sheets.cli --year 2025 formulas January E130:E140
 
 ## Project Structure
 
-- **`engine/`** — Statement parser (Excel), pipeline orchestrator, deduplication, row formatter
+- **`engine/`** — Statement parser (Excel), pipeline orchestrator, deduplication, row formatter, month-to-month carryover
 - **`classifier/`** — Lookup-based classifier (exact + prefix patterns), persisted to `.artifacts/lookup.json`
 - **`sheets/`** — Google Sheets API integration and CLI
 - **`config/`** — Settings management
