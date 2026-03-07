@@ -14,7 +14,9 @@ import pandas as pd
 from depensage.engine.statement_parser import StatementParser
 from depensage.engine.dedup import deduplicate
 from depensage.engine.formatter import format_for_sheet
-from depensage.sheets.spreadsheet_handler import SheetHandler, EXPENSE_END_MARKER
+from depensage.engine.carryover import run_carryover, get_previous_month
+from depensage.sheets.spreadsheet_handler import SheetHandler, SECTION_MARKERS
+from depensage.sheets.sheet_utils import SheetUtils
 from depensage.classifier.lookup import LookupClassifier
 
 logger = logging.getLogger(__name__)
@@ -129,11 +131,43 @@ def run_pipeline(statement_paths, handlers, classifier, year=None):
     # 6. Group by year-month
     combined["_year_month"] = combined["date"].dt.to_period("M")
     month_results = []
+    sheets_seen = set()
+
+    def _try_carryover(sheet_name, tx_year, get_handler_fn):
+        """Run carryover for a sheet if the previous month exists."""
+        prev_month, year_offset = get_previous_month(sheet_name)
+        if prev_month is None:
+            return
+        prev_year = tx_year + year_offset
+        try:
+            prev_handler = get_handler_fn(prev_year)
+        except ValueError:
+            logger.info(
+                f"No handler for year {prev_year}, skipping carryover "
+                f"from {prev_month}"
+            )
+            return
+        if not prev_handler.sheet_exists(prev_month):
+            logger.info(
+                f"Previous month sheet '{prev_month}' does not exist, "
+                f"skipping carryover"
+            )
+            return
+        dest_handler = get_handler_fn(tx_year)
+        result = run_carryover(prev_handler, prev_month, dest_handler, sheet_name)
+        logger.info(
+            f"Carryover {prev_month} → {sheet_name}: "
+            f"{result['budget_lines']} budget, "
+            f"{result['savings_lines']} savings"
+        )
 
     for period, group in combined.groupby("_year_month"):
         sample_date = group["date"].iloc[0]
         tx_year = sample_date.year
         handler = get_handler(tx_year)
+
+        expected_name = SheetUtils.get_sheet_name_for_date(sample_date)
+        is_new_sheet = expected_name and not handler.sheet_exists(expected_name)
 
         sheet_name = handler.get_or_create_month_sheet(sample_date)
 
@@ -141,11 +175,16 @@ def run_pipeline(statement_paths, handlers, classifier, year=None):
             logger.error(f"Failed to get/create sheet for {period}")
             continue
 
-        # Find marker
-        marker_row = handler.find_expense_end_row(sheet_name)
+        # Run carryover on newly created sheets (once per sheet)
+        if is_new_sheet and sheet_name not in sheets_seen:
+            sheets_seen.add(sheet_name)
+            _try_carryover(sheet_name, tx_year, get_handler)
+
+        # Find budget section marker
+        marker_row = handler.find_section_marker(sheet_name, "budget")
         if marker_row is None:
             raise ValueError(
-                f"No {EXPENSE_END_MARKER} marker found in column B of "
+                f"No {SECTION_MARKERS['budget']} marker found in column B of "
                 f"sheet '{sheet_name}'. Run the marker migration script first."
             )
 
@@ -169,11 +208,14 @@ def run_pipeline(statement_paths, handlers, classifier, year=None):
         # Find insertion point
         first_empty = handler.find_first_empty_expense_row(sheet_name)
         rows_needed = len(formatted)
-        available = marker_row - first_empty
+        # Data rows end at marker_row - 2 (total row is marker_row - 1)
+        last_data_row = marker_row - 2
+        available = last_data_row - first_empty + 1
 
         if available < rows_needed:
             insert_count = rows_needed - available
-            handler.insert_rows(sheet_name, marker_row, insert_count)
+            # Insert before the total row to push it and the marker down
+            handler.insert_rows(sheet_name, marker_row - 1, insert_count)
 
         # Write
         handler.write_expense_rows(sheet_name, first_empty, formatted)

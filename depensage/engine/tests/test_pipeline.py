@@ -33,7 +33,7 @@ class TestPipeline(unittest.TestCase):
 
         # Default handler behavior
         self.handler.get_or_create_month_sheet.return_value = "February"
-        self.handler.find_expense_end_row.return_value = 130
+        self.handler.find_section_marker.return_value = 131
         self.handler.read_expense_rows.return_value = []
         self.handler.find_first_empty_expense_row.return_value = 2
         self.handler.insert_rows.return_value = True
@@ -130,7 +130,7 @@ class TestPipeline(unittest.TestCase):
             ["02/01/2024", "Shop A", 100.50],
         ])
         self._setup_classifier_all_classified()
-        self.handler.find_expense_end_row.return_value = None
+        self.handler.find_section_marker.return_value = None
         with self.assertRaises(ValueError) as ctx:
             run_pipeline([path], self.handler, self.classifier)
         self.assertIn("marker", str(ctx.exception).lower())
@@ -142,9 +142,12 @@ class TestPipeline(unittest.TestCase):
             ["02/03/2024", "Shop C", 300.00],
         ])
         self._setup_classifier_all_classified()
-        self.handler.find_expense_end_row.return_value = 5
+        # marker at 6: total at 5, data rows 2-4 (3 slots)
+        # first_empty=4 means 1 slot available, need 3, so insert 2
+        self.handler.find_section_marker.return_value = 6
         self.handler.find_first_empty_expense_row.return_value = 4
         result = run_pipeline([path], self.handler, self.classifier)
+        # insert before total row (marker-1=5)
         self.handler.insert_rows.assert_called_once_with("February", 5, 2)
         self.assertEqual(result.months[0].written, 3)
 
@@ -209,14 +212,14 @@ class TestPipeline(unittest.TestCase):
 
         handler_2025 = MagicMock()
         handler_2025.get_or_create_month_sheet.return_value = "December"
-        handler_2025.find_expense_end_row.return_value = 130
+        handler_2025.find_section_marker.return_value = 131
         handler_2025.read_expense_rows.return_value = []
         handler_2025.find_first_empty_expense_row.return_value = 2
         handler_2025.write_expense_rows.return_value = True
 
         handler_2026 = MagicMock()
         handler_2026.get_or_create_month_sheet.return_value = "January"
-        handler_2026.find_expense_end_row.return_value = 130
+        handler_2026.find_section_marker.return_value = 131
         handler_2026.read_expense_rows.return_value = []
         handler_2026.find_first_empty_expense_row.return_value = 2
         handler_2026.write_expense_rows.return_value = True

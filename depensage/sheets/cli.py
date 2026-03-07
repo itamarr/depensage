@@ -487,6 +487,43 @@ def cmd_process(args):
             print(f"    - {name}")
 
 
+def cmd_carryover(args):
+    """Manually run carryover from one month to another."""
+    from depensage.engine.carryover import run_carryover
+
+    settings = load_settings()
+    credentials = args.credentials or settings["credentials_file"]
+    credentials = os.path.abspath(credentials)
+
+    source_year = int(args.source_year or args.year or 0)
+    dest_year = int(args.dest_year or args.year or 0)
+    if not source_year or not dest_year:
+        print("Specify --year or both --source-year and --dest-year.", file=sys.stderr)
+        sys.exit(1)
+
+    source_sid = get_spreadsheet_id(str(source_year), settings)
+    dest_sid = get_spreadsheet_id(str(dest_year), settings)
+
+    source_handler = _authenticate_handler(source_sid, credentials)
+    dest_handler = _authenticate_handler(dest_sid, credentials)
+
+    if not source_handler.sheet_exists(args.source):
+        print(f"Source sheet '{args.source}' not found.", file=sys.stderr)
+        sys.exit(1)
+    if not dest_handler.sheet_exists(args.dest):
+        print(f"Destination sheet '{args.dest}' not found.", file=sys.stderr)
+        sys.exit(1)
+
+    result = run_carryover(source_handler, args.source, dest_handler, args.dest)
+
+    print(f"\nCarryover {args.source} ({source_year}) → {args.dest} ({dest_year}):")
+    print(f"  Budget lines:  {result['budget_lines']}")
+    print(f"  Savings lines: {result['savings_lines']}")
+    if result['income_total'] is not None:
+        print(f"  Source income:  {result['income_total']:,.2f}")
+    print(f"  Savings budget: {'set' if result['savings_budget_set'] else 'not set'}")
+
+
 def cmd_consolidate_patterns(args):
     """Find duplicate exact entries that should be prefix patterns."""
     classifier = LookupClassifier()
@@ -563,6 +600,14 @@ def main():
         "statements", nargs="+", help="Path(s) to CC statement file(s)"
     )
 
+    carryover_parser = subparsers.add_parser(
+        "carryover", help="Run month-to-month carryover"
+    )
+    carryover_parser.add_argument("source", help="Source month (e.g. December)")
+    carryover_parser.add_argument("dest", help="Destination month (e.g. January)")
+    carryover_parser.add_argument("--source-year", help="Source year (default: --year)")
+    carryover_parser.add_argument("--dest-year", help="Destination year (default: --year)")
+
     subparsers.add_parser(
         "consolidate-patterns",
         help="Find duplicate exact entries that should be prefix patterns",
@@ -581,6 +626,7 @@ def main():
         "build-lookup": cmd_build_lookup,
         "review": cmd_review,
         "process": cmd_process,
+        "carryover": cmd_carryover,
         "consolidate-patterns": cmd_consolidate_patterns,
     }
     commands[args.command](args)

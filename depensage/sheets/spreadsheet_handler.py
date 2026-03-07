@@ -16,7 +16,15 @@ from depensage.sheets.sheet_utils import SheetUtils, find_first_empty_row
 
 logger = logging.getLogger(__name__)
 
-EXPENSE_END_MARKER = "---END---"
+SECTION_MARKERS = {
+    "budget": "---BUDGET---",
+    "income": "---INCOME---",
+    "savings": "---SAVINGS---",
+    "reconciliation": "---RECONCILIATION---",
+}
+
+# All marker values for scanning
+_ALL_MARKERS = set(SECTION_MARKERS.values())
 
 
 class SheetHandler:
@@ -317,22 +325,33 @@ class SheetHandler:
                 return sheet['properties']['sheetId']
         return None
 
-    def find_expense_end_row(self, sheet_name):
-        """Find the row containing EXPENSE_END_MARKER in column B.
+    def find_section_marker(self, sheet_name, section):
+        """Find the row containing a section marker in column B.
+
+        Args:
+            sheet_name: Name of the sheet.
+            section: Section name (key in SECTION_MARKERS, e.g. "budget").
 
         Returns:
             1-based row number, or None if not found.
         """
+        marker = SECTION_MARKERS.get(section)
+        if not marker:
+            logger.error(f"Unknown section: {section}")
+            return None
         values = self.get_sheet_values(sheet_name, 'B1:B200')
         if not values:
             return None
         for i, row in enumerate(values):
-            if row and row[0] == EXPENSE_END_MARKER:
+            if row and row[0] == marker:
                 return i + 1  # 1-based
         return None
 
     def read_expense_rows(self, sheet_name):
-        """Read expense data rows (B2 to the row before the marker).
+        """Read expense data rows (B2 to the row before the budget marker).
+
+        The expense total row sits at (budget_marker - 1), so data rows
+        end at (budget_marker - 2).
 
         Uses UNFORMATTED_VALUE so dates come as serial numbers and
         amounts as raw numbers rather than locale-formatted strings.
@@ -342,10 +361,10 @@ class SheetHandler:
             subcategory, amount, category, date_serial]. Returns empty
             list if marker not found.
         """
-        marker_row = self.find_expense_end_row(sheet_name)
-        if not marker_row or marker_row <= 2:
+        marker_row = self.find_section_marker(sheet_name, "budget")
+        if not marker_row or marker_row <= 3:
             return []
-        last_data_row = marker_row - 1
+        last_data_row = marker_row - 2
         try:
             result = self.sheets_service.values().get(
                 spreadsheetId=self.spreadsheet_id,
@@ -358,18 +377,19 @@ class SheetHandler:
             return []
 
     def find_first_empty_expense_row(self, sheet_name):
-        """Find first empty row between row 2 and the marker.
+        """Find first empty row between row 2 and the budget marker.
 
         Scans column G (date) since every expense has a date.
+        Data rows end at (budget_marker - 2), since (marker - 1) is the total row.
 
         Returns:
             1-based row number, or None if marker not found.
         """
-        marker_row = self.find_expense_end_row(sheet_name)
+        marker_row = self.find_section_marker(sheet_name, "budget")
         if not marker_row:
             return None
-        # Read dates from G2 to G{marker_row-1}
-        last_data_row = marker_row - 1
+        # Data rows end at marker_row - 2 (total row is marker_row - 1)
+        last_data_row = marker_row - 2
         if last_data_row < 2:
             return 2
         values = self.get_sheet_values(sheet_name, f'G2:G{last_data_row}')
