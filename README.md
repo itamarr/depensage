@@ -1,95 +1,116 @@
 # DepenSage
 
-*Smart expense tracking with neural network classification*
+*Automated household expense tracking for Google Sheets*
 
 ## Overview
 
-DepenSage (from French "dépense" meaning expense + "sage" meaning wise) is an intelligent expense tracking tool that automates the process of categorizing credit card transactions and updating your financial spreadsheets.
-
-Unlike traditional expense trackers that rely on fixed rules, DepenSage uses neural networks to learn your personal categorization patterns from historical data, achieving higher accuracy and adapting to your unique financial organization.
+DepenSage (from French "dépense" meaning expense + "sage" meaning wise) automates household expense tracking in a Hebrew Google Sheets spreadsheet. It parses Israeli credit card statements, classifies transactions using a lookup table, deduplicates against existing data, and writes everything to the correct monthly sheet.
 
 ## Features
 
-- **Neural Network Classification**: Automatically categorizes transactions based on your historical data
-- **Multi-level Classification**: Predicts both main categories and subcategories
-- **Google Sheets Integration**: Seamlessly updates your existing Google Sheets expense tracker
-- **Hebrew Language Support**: Full support for Hebrew spreadsheets and locality settings
-- **CSV Statement Parsing**: Processes standard credit card statement CSV files
-- **Automated Sheet Management**: Creates monthly sheets as needed
-- **Command-line Interface**: Easy to use for regular statement processing
-
-## Installation
-
-```bash
-pip install depensage
-```
+- **Automated Pipeline**: Parse CC statements → filter pending → classify → deduplicate → write to sheet
+- **Lookup-based Classification**: Exact match and prefix pattern matching against a table built from historical data
+- **Interactive Review**: CLI workflow to classify unknown merchants, feeding back into the lookup table
+- **Multi-year Support**: Separate spreadsheet per year, with `--year` filtering
+- **Deduplication**: Safe to re-run — duplicate transactions are detected and skipped
+- **Google Sheets Integration**: Creates monthly sheets from templates, inserts rows when needed
+- **Hebrew Language Support**: Full support for Hebrew spreadsheets and categories
+- **Excel Statement Parsing**: Processes `.xlsx` files from Israeli CC providers (Cal, etc.)
 
 ## Requirements
 
-- Python 3.7+
-- Google Sheets API credentials
-- TensorFlow 2.4+
+- Python 3.12+
+- Google Sheets API service account credentials
+- [uv](https://github.com/astral-sh/uv) (recommended for package management)
 
 ## Setup
 
-1. **Google Sheets API Setup**:
-   - Create a Google Cloud Project
-   - Enable the Google Sheets API
-   - Create a service account and download credentials
+1. **Google Sheets API**:
+   - Create a Google Cloud project and enable the Sheets API
+   - Create a service account and download the JSON key
    - Share your expense spreadsheet with the service account email
 
-2. **Configuration**:
+2. **Install**:
    ```bash
-   depensage configure --spreadsheet-id YOUR_SPREADSHEET_ID --credentials-file path/to/credentials.json
+   git clone https://github.com/itamarr/depensage.git
+   cd depensage
+   uv venv && source .venv/bin/activate
+   uv pip install -e .
+   ```
+
+3. **Configure** (`.secrets/config.json`, gitignored):
+   ```json
+   {
+     "spreadsheets": {
+       "2025": "your_2025_spreadsheet_id",
+       "2026": "your_2026_spreadsheet_id"
+     },
+     "credentials_file": ".secrets/your-credentials.json"
+   }
+   ```
+
+4. **Plant markers** (one-time, adds `---END---` boundary markers to existing month sheets):
+   ```bash
+   python scripts/plant_markers.py
    ```
 
 ## Usage
 
-### Training the Model
-
-Before first use, train the neural network on your historical data:
+### Process CC statements (main pipeline)
 
 ```bash
-depensage train
+# Process one or more statement files
+python -m depensage.sheets.cli process statement.xlsx
+
+# Process only 2026 transactions (ignores other years in the file)
+python -m depensage.sheets.cli --year 2026 process statement.xlsx
 ```
 
-### Processing Credit Card Statements
-
-Process your credit card statements:
+### Review unknown merchants
 
 ```bash
-depensage process your_statement.csv
+python -m depensage.sheets.cli review statement.xlsx
 ```
 
-For multiple statements (e.g., yours and your spouse's):
+### Build lookup table from historical sheet data
 
 ```bash
-depensage process your_statement.csv spouse_statement.csv
+python -m depensage.sheets.cli --year 2025 build-lookup
+```
+
+### Consolidate exact entries into prefix patterns
+
+```bash
+python -m depensage.sheets.cli consolidate-patterns
+```
+
+### Inspect sheets (development)
+
+```bash
+python -m depensage.sheets.cli --year 2025 list-sheets
+python -m depensage.sheets.cli --year 2025 read January B2:G10
+python -m depensage.sheets.cli --year 2025 formulas January E130:E140
 ```
 
 ## Project Structure
 
-DepenSage is organized into several logical components:
-
-- **classifier**: Neural network-based classification system
-- **sheets**: Google Sheets interaction
-- **engine**: Main processing engine
-- **config**: Configuration management
+- **`engine/`** — Statement parser (Excel), pipeline orchestrator, deduplication, row formatter
+- **`classifier/`** — Lookup-based classifier (exact + prefix patterns), persisted to `.artifacts/lookup.json`
+- **`sheets/`** — Google Sheets API integration and CLI
+- **`config/`** — Settings management
+- **`scripts/`** — One-time migration scripts
 
 ## Development
 
-### Running Tests
-
 ```bash
+source .venv/bin/activate
+
+# Run all tests
 python -m unittest discover
-```
 
-### Building from Source
-
-```bash
-git clone https://github.com/yourusername/depensage.git
-cd depensage
-pip install -e .
+# Lint and format
+flake8 depensage/
+black depensage/
 ```
 
 ## License
