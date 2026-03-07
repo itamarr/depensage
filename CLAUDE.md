@@ -47,6 +47,10 @@ python -m depensage.sheets.cli build-lookup [--output PATH]
 # Consolidate exact entries into prefix patterns
 python -m depensage.sheets.cli consolidate-patterns
 
+# Manual carryover between months
+python -m depensage.sheets.cli carryover December January  # same year
+python -m depensage.sheets.cli carryover December January --source-year 2025 --dest-year 2026  # cross-year
+
 # Sheet inspection (development)
 python -m depensage.sheets.cli list-sheets
 python -m depensage.sheets.cli read <sheet> <range>
@@ -71,11 +75,13 @@ Each month has ~130 expense rows with columns (right-to-left):
 - **C:** הערות (Notes)
 - **B:** שם בית עסק (Business name) — populated since March 2025
 
-Below the transactions, each monthly sheet has four sections:
-1. **Budget summary** (~row 130) — SUMIFS comparing actual spend per category against budget, with accumulated carryover from prior months
-2. **Income** (~row 158) — salary and other income entries
-3. **Savings tracker** (~row 167) — per-goal balances with targets and months-remaining
-4. **Bank reconciliation** (bottom) — actual bank balances vs. expected. This is where the budget is verified against real money in the bank. The "gap" (פער) reveals tracking errors.
+Below the transactions, each monthly sheet has four sections, delimited by hidden marker rows in column B:
+1. **`---BUDGET---`** — SUMIFS comparing actual spend per category against budget, with accumulated carryover from prior months. Column H has `CARRY` flags on lines that carry over surplus to the next month.
+2. **`---INCOME---`** — salary and other income entries
+3. **`---SAVINGS---`** — per-goal balances with targets and months-remaining
+4. **`---RECONCILIATION---`** — actual bank balances vs. expected (the "gap"/פער reveals tracking errors)
+
+The expense total row sits between the expense data and the `---BUDGET---` marker.
 
 ### Green Color-Coding (Charged vs. Pending)
 Expenses highlighted green have been charged to the bank account. Non-green expenses are still pending on the credit card. This distinction is structurally important — the reconciliation section only works correctly when charged expenses are marked. A custom **Apps Script `sumbycolor` function** sums green-highlighted cells. This function must be manually triggered by editing its cell.
@@ -111,13 +117,14 @@ Core library (no I/O, no prompts) → CLI (dev/testing) → web app (end product
 4. Deduplicate against existing sheet data (`engine/dedup.py`)
 5. Format rows for columns B–G (`engine/formatter.py`)
 6. Insert rows if expense section is full, write to correct monthly sheet
+7. When creating a new month sheet, run carryover from the previous month (`engine/carryover.py`): budget accumulated (surplus only), savings accumulated, and savings budget line (set so total budget = previous income)
 
 The pipeline supports multiple spreadsheets (one per year) and an optional `--year` filter. Without `--year`, transactions are routed to the appropriate year's spreadsheet automatically.
 
-Expense section boundary is marked by `---END---` in column B (at the totals row). Migration script: `scripts/plant_markers.py`.
+Section boundaries are marked by hidden rows in column B (`---BUDGET---`, `---INCOME---`, `---SAVINGS---`, `---RECONCILIATION---`). Migration script: `scripts/plant_section_markers.py`.
 
 ### Modules
-- **`engine/`** — `StatementParser` (Excel only), `pipeline.py` (orchestrator), `dedup.py`, `formatter.py`
+- **`engine/`** — `StatementParser` (Excel only), `pipeline.py` (orchestrator), `dedup.py`, `formatter.py`, `carryover.py`
 - **`classifier/`** — `LookupClassifier` with exact matches and prefix patterns, persisted to `.artifacts/lookup.json`
 - **`sheets/`** — `SheetHandler` (Google Sheets API: auth, read, write, metadata, row insertion, marker detection). `cli.py` is the CLI.
 - **`config/`** — Settings loaded from `.secrets/config.json`. Config maps years to spreadsheet IDs: `{"spreadsheets": {"2025": "id1", "2026": "id2"}, "credentials_file": "..."}`
@@ -126,7 +133,7 @@ Expense section boundary is marked by `---END---` in column B (at the totals row
 ### Key Pain Points to Automate
 1. **Data entry** — parsing CC statements and writing to the correct monthly sheet with classified categories
 2. **Charged vs. pending tracking** — replacing fragile color-based system with a reliable status mechanism
-3. **Month-to-month carryover** — savings balances and accumulated budget are currently copied by hand
+3. **Month-to-month carryover** — automated via `engine/carryover.py`, triggered on new month creation
 4. **Bank reconciliation** — direct bank charges (הוראות קבע) can be auto-tagged since they're recurring and predictable
 5. **Merged Expenses formula** — needs manual update each year to include new months
 
