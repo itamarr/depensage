@@ -36,6 +36,7 @@ The main interface for DepenSage:
 ```bash
 # Process CC statements (the main pipeline)
 python -m depensage.sheets.cli process statement1.xlsx [statement2.xlsx ...]
+python -m depensage.sheets.cli --year 2026 process statement.xlsx  # only 2026 transactions
 
 # Review unknown merchants interactively
 python -m depensage.sheets.cli review statement.xlsx
@@ -111,13 +112,15 @@ Core library (no I/O, no prompts) → CLI (dev/testing) → web app (end product
 5. Format rows for columns B–G (`engine/formatter.py`)
 6. Insert rows if expense section is full, write to correct monthly sheet
 
+The pipeline supports multiple spreadsheets (one per year) and an optional `--year` filter. Without `--year`, transactions are routed to the appropriate year's spreadsheet automatically.
+
 Expense section boundary is marked by `---END---` in column B (at the totals row). Migration script: `scripts/plant_markers.py`.
 
 ### Modules
 - **`engine/`** — `StatementParser` (Excel only), `pipeline.py` (orchestrator), `dedup.py`, `formatter.py`
 - **`classifier/`** — `LookupClassifier` with exact matches and prefix patterns, persisted to `.artifacts/lookup.json`
 - **`sheets/`** — `SheetHandler` (Google Sheets API: auth, read, write, metadata, row insertion, marker detection). `cli.py` is the CLI.
-- **`config/`** — Settings loaded from `.secrets/config.json`
+- **`config/`** — Settings loaded from `.secrets/config.json`. Config maps years to spreadsheet IDs: `{"spreadsheets": {"2025": "id1", "2026": "id2"}, "credentials_file": "..."}`
 - **`scripts/`** — One-time migration scripts
 
 ### Key Pain Points to Automate

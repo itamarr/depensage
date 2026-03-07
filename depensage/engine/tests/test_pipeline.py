@@ -173,6 +173,74 @@ class TestPipeline(unittest.TestCase):
         self.assertEqual(result.total_parsed, 2)
         self.assertEqual(result.months[0].written, 2)
 
+    def test_year_filter(self):
+        """Only transactions from the specified year are processed."""
+        path = self._excel([
+            ["12/15/2025", "Shop A", 100.50],
+            ["01/05/2026", "Shop B", 50.75],
+        ])
+        self._setup_classifier_all_classified()
+        self.handler.get_or_create_month_sheet.side_effect = lambda d: d.strftime("%B")
+        result = run_pipeline([path], self.handler, self.classifier, year=2026)
+        self.assertEqual(result.total_parsed, 2)
+        self.assertEqual(len(result.months), 1)
+        self.assertEqual(result.months[0].month, "January")
+        self.assertEqual(result.months[0].year, 2026)
+        self.assertEqual(result.months[0].written, 1)
+
+    def test_year_filter_no_matches(self):
+        """Year filter with no matching transactions returns early."""
+        path = self._excel([
+            ["12/15/2025", "Shop A", 100.50],
+        ])
+        self._setup_classifier_all_classified()
+        result = run_pipeline([path], self.handler, self.classifier, year=2026)
+        self.assertEqual(result.total_parsed, 1)
+        self.assertEqual(result.classified, 0)
+        self.assertEqual(len(result.months), 0)
+
+    def test_handler_dict(self):
+        """Handlers dict routes years to correct handlers."""
+        path = self._excel([
+            ["12/15/2025", "Shop A", 100.50],
+            ["01/05/2026", "Shop B", 50.75],
+        ])
+        self._setup_classifier_all_classified()
+
+        handler_2025 = MagicMock()
+        handler_2025.get_or_create_month_sheet.return_value = "December"
+        handler_2025.find_expense_end_row.return_value = 130
+        handler_2025.read_expense_rows.return_value = []
+        handler_2025.find_first_empty_expense_row.return_value = 2
+        handler_2025.write_expense_rows.return_value = True
+
+        handler_2026 = MagicMock()
+        handler_2026.get_or_create_month_sheet.return_value = "January"
+        handler_2026.find_expense_end_row.return_value = 130
+        handler_2026.read_expense_rows.return_value = []
+        handler_2026.find_first_empty_expense_row.return_value = 2
+        handler_2026.write_expense_rows.return_value = True
+
+        handlers = {2025: handler_2025, 2026: handler_2026}
+        result = run_pipeline([path], handlers, self.classifier)
+
+        handler_2025.write_expense_rows.assert_called_once()
+        handler_2026.write_expense_rows.assert_called_once()
+        self.assertEqual(len(result.months), 2)
+        years = {m.year for m in result.months}
+        self.assertEqual(years, {2025, 2026})
+
+    def test_handler_dict_missing_year(self):
+        """Missing year in handler dict raises ValueError."""
+        path = self._excel([
+            ["01/05/2026", "Shop A", 50.75],
+        ])
+        self._setup_classifier_all_classified()
+        handlers = {2025: self.handler}  # no 2026
+        with self.assertRaises(ValueError) as ctx:
+            run_pipeline([path], handlers, self.classifier)
+        self.assertIn("2026", str(ctx.exception))
+
 
 if __name__ == "__main__":
     unittest.main()

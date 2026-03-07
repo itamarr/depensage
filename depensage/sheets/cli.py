@@ -17,21 +17,70 @@ import os
 import sys
 
 from depensage.classifier.lookup import Classification, LookupClassifier, DEFAULT_LOOKUP_PATH
-from depensage.config.settings import load_settings
+from depensage.config.settings import load_settings, get_spreadsheet_id
 from depensage.sheets.spreadsheet_handler import SheetHandler
 
 
-def get_handler(args):
-    settings = load_settings()
-    spreadsheet_id = args.spreadsheet_id or settings["spreadsheet_id"]
-    credentials = args.credentials or settings["credentials_file"]
-    credentials = os.path.abspath(credentials)
-
+def _authenticate_handler(spreadsheet_id, credentials):
+    """Create and authenticate a SheetHandler."""
     handler = SheetHandler(spreadsheet_id)
     if not handler.authenticate(credentials):
         print("Authentication failed.", file=sys.stderr)
         sys.exit(1)
     return handler
+
+
+def get_handler(args):
+    """Get a single SheetHandler for the specified year (or the only configured one)."""
+    settings = load_settings()
+    credentials = args.credentials or settings["credentials_file"]
+    credentials = os.path.abspath(credentials)
+
+    if args.spreadsheet_id:
+        return _authenticate_handler(args.spreadsheet_id, credentials)
+
+    year = getattr(args, "year", None)
+    spreadsheets = settings["spreadsheets"]
+
+    if year:
+        spreadsheet_id = get_spreadsheet_id(year, settings)
+    elif len(spreadsheets) == 1:
+        spreadsheet_id = next(iter(spreadsheets.values()))
+    else:
+        available = ", ".join(sorted(spreadsheets.keys()))
+        print(f"Multiple spreadsheets configured ({available}). "
+              f"Use --year to select one.", file=sys.stderr)
+        sys.exit(1)
+
+    return _authenticate_handler(spreadsheet_id, credentials)
+
+
+def get_handlers_for_pipeline(args):
+    """Get a dict of {year: SheetHandler} for the pipeline.
+
+    If --year is specified, returns only that year's handler.
+    Otherwise returns handlers for all configured years.
+    """
+    settings = load_settings()
+    credentials = args.credentials or settings["credentials_file"]
+    credentials = os.path.abspath(credentials)
+
+    if args.spreadsheet_id:
+        # Single override — use for all years
+        return _authenticate_handler(args.spreadsheet_id, credentials)
+
+    spreadsheets = settings["spreadsheets"]
+    year = getattr(args, "year", None)
+
+    if year:
+        spreadsheet_id = get_spreadsheet_id(year, settings)
+        return {int(year): _authenticate_handler(spreadsheet_id, credentials)}
+
+    # All years
+    handlers = {}
+    for y, sid in spreadsheets.items():
+        handlers[int(y)] = _authenticate_handler(sid, credentials)
+    return handlers
 
 
 def cmd_list_sheets(args):
@@ -410,8 +459,9 @@ def cmd_process(args):
     """Process CC statement files through the automated pipeline."""
     from depensage.engine.pipeline import run_pipeline
 
-    handler = get_handler(args)
+    handlers = get_handlers_for_pipeline(args)
     classifier = LookupClassifier()
+    year = int(args.year) if args.year else None
 
     paths = args.statements
     for p in paths:
@@ -419,7 +469,7 @@ def cmd_process(args):
             print(f"File not found: {p}", file=sys.stderr)
             sys.exit(1)
 
-    result = run_pipeline(paths, handler, classifier)
+    result = run_pipeline(paths, handlers, classifier, year=year)
 
     print(f"\nPipeline complete:")
     print(f"  Parsed:     {result.total_parsed}")
@@ -429,7 +479,7 @@ def cmd_process(args):
     print()
 
     for mr in result.months:
-        print(f"  {mr.month}: {mr.written} written, {mr.duplicates} duplicates")
+        print(f"  {mr.month} {mr.year}: {mr.written} written, {mr.duplicates} duplicates")
 
     if result.unclassified_merchants:
         print(f"\n  Unclassified merchants ({len(result.unclassified_merchants)}):")
@@ -476,8 +526,9 @@ def cmd_consolidate_patterns(args):
 
 def main():
     parser = argparse.ArgumentParser(description="DepenSage Sheets CLI")
-    parser.add_argument("--spreadsheet-id", help="Google Spreadsheet ID")
+    parser.add_argument("--spreadsheet-id", help="Google Spreadsheet ID (overrides config)")
     parser.add_argument("--credentials", help="Path to service account JSON key")
+    parser.add_argument("--year", help="Year to operate on (e.g. 2026)")
 
     subparsers = parser.add_subparsers(dest="command")
 
@@ -503,7 +554,7 @@ def main():
     review_parser = subparsers.add_parser(
         "review", help="Classify unknown merchants from a CC statement"
     )
-    review_parser.add_argument("statement", help="Path to CC statement CSV file")
+    review_parser.add_argument("statement", help="Path to CC statement file")
 
     process_parser = subparsers.add_parser(
         "process", help="Process CC statements through the automated pipeline"

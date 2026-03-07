@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 _settings_cache = None
 
 # Required settings keys
-REQUIRED_SETTINGS = ['spreadsheet_id', 'credentials_file']
+REQUIRED_SETTINGS = ['spreadsheets', 'credentials_file']
 
 DEFAULT_CONFIG_PATH = os.path.join(
     os.path.dirname(__file__), '..', '..', '.secrets', 'config.json'
@@ -41,8 +41,14 @@ def load_settings(config_file=None, force_reload=False):
     """
     Load settings from configuration file, using cached version if available.
 
+    Config format:
+        {
+            "spreadsheets": {"2025": "spreadsheet_id_1", "2026": "spreadsheet_id_2"},
+            "credentials_file": ".secrets/credentials.json"
+        }
+
     Args:
-        config_file: Path to configuration file (default: ~/.depensage/config.json)
+        config_file: Path to configuration file (default: .secrets/config.json)
         force_reload: Whether to force reloading from file, ignoring cache
 
     Returns:
@@ -78,6 +84,9 @@ def load_settings(config_file=None, force_reload=False):
         if missing_keys:
             raise ValueError(f"Missing required settings: {', '.join(missing_keys)}")
 
+        if not isinstance(settings['spreadsheets'], dict):
+            raise ValueError("'spreadsheets' must be a dict mapping year to spreadsheet ID")
+
         creds_file = settings.get('credentials_file')
         if not os.path.exists(creds_file):
             raise ValueError(f"Credentials file does not exist: {creds_file}")
@@ -92,3 +101,29 @@ def load_settings(config_file=None, force_reload=False):
     _settings_cache = settings
 
     return settings
+
+
+def get_spreadsheet_id(year, settings=None):
+    """Get the spreadsheet ID for a given year.
+
+    Args:
+        year: Year as int or string (e.g., 2026 or "2026").
+        settings: Settings dict (loads from config if None).
+
+    Returns:
+        Spreadsheet ID string.
+
+    Raises:
+        ValueError: If no spreadsheet configured for the given year.
+    """
+    if settings is None:
+        settings = load_settings()
+    year_str = str(year)
+    spreadsheets = settings['spreadsheets']
+    if year_str not in spreadsheets:
+        available = ', '.join(sorted(spreadsheets.keys()))
+        raise ValueError(
+            f"No spreadsheet configured for year {year_str}. "
+            f"Available: {available}"
+        )
+    return spreadsheets[year_str]

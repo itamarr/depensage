@@ -23,6 +23,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class MonthResult:
     month: str
+    year: int
     written: int
     duplicates: int
 
@@ -37,21 +38,42 @@ class PipelineResult:
     unclassified_merchants: list[str] = field(default_factory=list)
 
 
-def run_pipeline(statement_paths, handler, classifier):
+def run_pipeline(statement_paths, handlers, classifier, year=None):
     """Run the full expense processing pipeline.
 
     Args:
         statement_paths: List of file paths to CC statement files.
-        handler: Authenticated SheetHandler instance.
+        handlers: Dict mapping year (int) to authenticated SheetHandler,
+                  or a single SheetHandler (used for all years).
         classifier: LookupClassifier instance.
+        year: Optional year filter (int). If set, only transactions
+              from this year are processed.
 
     Returns:
         PipelineResult with processing statistics.
 
     Raises:
-        ValueError: If no transactions parsed or marker not found.
+        ValueError: If marker not found or no handler for a year.
     """
     parser = StatementParser()
+
+    # Normalize handlers: dict of {year: handler} or single handler for all years
+    if isinstance(handlers, dict):
+        handler_dict = handlers
+        single_handler = None
+    else:
+        handler_dict = None
+        single_handler = handlers
+
+    def get_handler(tx_year):
+        if single_handler is not None:
+            return single_handler
+        if tx_year not in handler_dict:
+            raise ValueError(
+                f"No spreadsheet handler configured for year {tx_year}. "
+                f"Available: {sorted(handler_dict.keys())}"
+            )
+        return handler_dict[tx_year]
 
     # 1. Parse all files and merge
     dfs = []
@@ -76,7 +98,15 @@ def run_pipeline(statement_paths, handler, classifier):
                               pending_skipped=pending_skipped,
                               classified=0, unclassified=0)
 
-    # 3. Classify
+    # 3. Apply year filter
+    if year is not None:
+        charged = charged[charged["date"].dt.year == year].reset_index(drop=True)
+        if charged.empty:
+            return PipelineResult(total_parsed=total_parsed,
+                                  pending_skipped=pending_skipped,
+                                  classified=0, unclassified=0)
+
+    # 4. Classify
     result = classifier.classify(charged)
     classified_count = len(result.classified)
     unclassified_count = len(result.unclassified)
@@ -85,7 +115,7 @@ def run_pipeline(statement_paths, handler, classifier):
         if not result.unclassified.empty else []
     )
 
-    # 4. Recombine: classified + unclassified (with empty category/subcategory)
+    # 5. Recombine: classified + unclassified (with empty category/subcategory)
     if not result.unclassified.empty:
         unclassified_with_cols = result.unclassified.copy()
         unclassified_with_cols["category"] = ""
@@ -96,12 +126,15 @@ def run_pipeline(statement_paths, handler, classifier):
     else:
         combined = result.classified
 
-    # 5. Group by year-month
+    # 6. Group by year-month
     combined["_year_month"] = combined["date"].dt.to_period("M")
     month_results = []
 
     for period, group in combined.groupby("_year_month"):
         sample_date = group["date"].iloc[0]
+        tx_year = sample_date.year
+        handler = get_handler(tx_year)
+
         sheet_name = handler.get_or_create_month_sheet(sample_date)
 
         if not sheet_name:
@@ -126,7 +159,7 @@ def run_pipeline(statement_paths, handler, classifier):
 
         if new_txns.empty:
             month_results.append(MonthResult(
-                month=sheet_name, written=0, duplicates=dup_count
+                month=sheet_name, year=tx_year, written=0, duplicates=dup_count
             ))
             continue
 
@@ -136,7 +169,6 @@ def run_pipeline(statement_paths, handler, classifier):
         # Find insertion point
         first_empty = handler.find_first_empty_expense_row(sheet_name)
         rows_needed = len(formatted)
-        # Re-read marker_row since it may shift if we insert
         available = marker_row - first_empty
 
         if available < rows_needed:
@@ -147,7 +179,8 @@ def run_pipeline(statement_paths, handler, classifier):
         handler.write_expense_rows(sheet_name, first_empty, formatted)
 
         month_results.append(MonthResult(
-            month=sheet_name, written=len(formatted), duplicates=dup_count
+            month=sheet_name, year=tx_year,
+            written=len(formatted), duplicates=dup_count
         ))
 
     return PipelineResult(
