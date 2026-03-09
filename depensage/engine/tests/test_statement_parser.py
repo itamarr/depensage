@@ -7,7 +7,7 @@ import os
 import tempfile
 import pandas as pd
 
-from depensage.engine.statement_parser import StatementParser
+from depensage.engine.statement_parser import StatementParser, IN_PROCESS_TEXT
 
 
 def _write_excel(rows, headers, title_row="Account holder info"):
@@ -118,43 +118,71 @@ class TestStatementParser(unittest.TestCase):
         self.assertIsNotNone(result)
         self.assertEqual(len(result), 2)
 
-    def test_filter_pending_removes_nat(self):
+    def test_comments_column_extracted(self):
+        path = self._excel(
+            rows=[
+                ["01/02/2024", "Shop A", 100.50, "1234", "02/05/2024",
+                 "רגילה", "", "", ""],
+                ["03/02/2024", "Shop B", 50.00, "1234", None,
+                 "רגילה", "", "", IN_PROCESS_TEXT],
+            ],
+            headers=["תאריך", "שם בית עסק", "סכום", "כרטיס", "מועד חיוב",
+                     "סוג עסקה", "מזהה", "הנחה", "הערות"],
+        )
+        result = self.parser.parse_statement(path)
+        self.assertIn("comments", result.columns)
+
+    def test_filter_in_process_by_comments(self):
+        """Primary signal: comments column with in-process text."""
+        df = pd.DataFrame({
+            "date": pd.to_datetime(["2024-02-01", "2024-02-05"]),
+            "business_name": ["A", "B"],
+            "amount": [10, 20],
+            "charge_date": pd.to_datetime(["2024-03-01", pd.NaT]),
+            "comments": ["", IN_PROCESS_TEXT],
+        })
+        result = StatementParser.filter_in_process(df)
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result.iloc[0]["business_name"], "A")
+
+    def test_filter_in_process_by_charge_date_fallback(self):
+        """Fallback: missing charge_date without comments column."""
         df = pd.DataFrame({
             "date": pd.to_datetime(["2024-02-01", "2024-02-05", "2024-02-10"]),
             "business_name": ["A", "B", "C"],
             "amount": [10, 20, 30],
             "charge_date": pd.to_datetime(["2024-03-01", pd.NaT, "2024-03-10"]),
         })
-        result = StatementParser.filter_pending(df)
+        result = StatementParser.filter_in_process(df)
         self.assertEqual(len(result), 2)
         self.assertEqual(result.iloc[0]["business_name"], "A")
         self.assertEqual(result.iloc[1]["business_name"], "C")
 
-    def test_filter_pending_no_charge_date_column(self):
+    def test_filter_in_process_no_columns(self):
         df = pd.DataFrame({
             "date": pd.to_datetime(["2024-02-01"]),
             "business_name": ["A"],
             "amount": [10],
         })
-        result = StatementParser.filter_pending(df)
+        result = StatementParser.filter_in_process(df)
         self.assertEqual(len(result), 1)
 
-    def test_filter_pending_empty(self):
-        result = StatementParser.filter_pending(pd.DataFrame())
+    def test_filter_in_process_empty(self):
+        result = StatementParser.filter_in_process(pd.DataFrame())
         self.assertTrue(result.empty)
 
-    def test_filter_pending_none(self):
-        result = StatementParser.filter_pending(None)
+    def test_filter_in_process_none(self):
+        result = StatementParser.filter_in_process(None)
         self.assertIsNone(result)
 
-    def test_filter_pending_all_pending(self):
+    def test_filter_in_process_all_in_process(self):
         df = pd.DataFrame({
             "date": pd.to_datetime(["2024-02-01", "2024-02-05"]),
             "business_name": ["A", "B"],
             "amount": [10, 20],
             "charge_date": [pd.NaT, pd.NaT],
         })
-        result = StatementParser.filter_pending(df)
+        result = StatementParser.filter_in_process(df)
         self.assertEqual(len(result), 0)
 
 

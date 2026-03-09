@@ -10,8 +10,12 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-# Hebrew header keyword for charge-date column detection
+# Hebrew header keywords for column detection
 _CHARGE_DATE_HEADER = "מועד"
+_COMMENTS_HEADER = "הערות"
+
+# Hebrew text indicating a transaction is still being processed
+IN_PROCESS_TEXT = "עסקה בקליטה"
 
 
 class StatementParser:
@@ -51,6 +55,11 @@ class StatementParser:
             charge_date_idx = self._find_column_index(headers, _CHARGE_DATE_HEADER)
             if charge_date_idx is not None:
                 result["charge_date"] = df.iloc[:, charge_date_idx].values
+
+            # Look for comments column (used to detect in-process transactions)
+            comments_idx = self._find_column_index(headers, _COMMENTS_HEADER)
+            if comments_idx is not None:
+                result["comments"] = df.iloc[:, comments_idx].values
 
             if result.empty:
                 return None
@@ -107,15 +116,25 @@ class StatementParser:
             return None
 
     @staticmethod
-    def filter_pending(df):
-        """Filter out pending transactions (where charge_date is NaT).
+    def filter_in_process(df):
+        """Filter out in-process transactions.
 
-        If the DataFrame has no charge_date column, returns all rows.
+        A transaction is in-process if its comments column contains
+        "עסקה בקליטה" (primary signal) or if charge_date is NaT (fallback).
+
+        If the DataFrame has neither column, returns all rows.
         """
         if df is None or df.empty:
             return df
 
-        if "charge_date" not in df.columns:
-            return df
+        mask = pd.Series(True, index=df.index)
 
-        return df[df["charge_date"].notna()].reset_index(drop=True)
+        # Primary: filter by comments column
+        if "comments" in df.columns:
+            mask &= df["comments"].astype(str).str.strip() != IN_PROCESS_TEXT
+
+        # Fallback: filter by missing charge_date
+        if "charge_date" in df.columns:
+            mask &= df["charge_date"].notna()
+
+        return df[mask].reset_index(drop=True)

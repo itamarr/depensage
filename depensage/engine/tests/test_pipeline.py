@@ -78,7 +78,7 @@ class TestPipeline(unittest.TestCase):
         result = run_pipeline([path], self.handler, self.classifier)
 
         self.assertEqual(result.total_parsed, 2)
-        self.assertEqual(result.pending_skipped, 0)
+        self.assertEqual(result.in_process_skipped, 0)
         self.assertEqual(result.classified, 2)
         self.assertEqual(result.unclassified, 0)
         self.assertEqual(len(result.months), 1)
@@ -86,7 +86,7 @@ class TestPipeline(unittest.TestCase):
         self.assertEqual(result.months[0].duplicates, 0)
         self.handler.write_expense_rows.assert_called_once()
 
-    def test_all_pending_filtered(self):
+    def test_all_in_process_filtered(self):
         path = self._excel(
             rows=[
                 ["02/01/2024", "Shop A", 100.50, "1234", None],
@@ -96,7 +96,7 @@ class TestPipeline(unittest.TestCase):
         )
         self._setup_classifier_all_classified()
         result = run_pipeline([path], self.handler, self.classifier)
-        self.assertEqual(result.pending_skipped, 2)
+        self.assertEqual(result.in_process_skipped, 2)
         self.assertEqual(result.classified, 0)
 
     def test_all_duplicates(self):

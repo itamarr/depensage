@@ -452,12 +452,12 @@ class SheetHandler:
             return False
 
     def write_expense_rows(self, sheet_name, start_row, rows):
-        """Write expense rows to columns B–G.
+        """Write expense rows to columns B–H.
 
         Args:
             sheet_name: Name of the sheet.
             start_row: 1-based row to start writing.
-            rows: List of 6-element lists [B, C, D, E, F, G].
+            rows: List of 7-element lists [B, C, D, E, F, G, H].
 
         Returns:
             True if successful, False otherwise.
@@ -471,7 +471,7 @@ class SheetHandler:
                 return True
 
             end_row = start_row + len(rows) - 1
-            range_str = f'{sheet_name}!B{start_row}:G{end_row}'
+            range_str = f'{sheet_name}!B{start_row}:H{end_row}'
 
             body = {'values': rows}
             result = self.sheets_service.values().update(

@@ -473,7 +473,7 @@ def cmd_process(args):
 
     print(f"\nPipeline complete:")
     print(f"  Parsed:     {result.total_parsed}")
-    print(f"  Pending:    {result.pending_skipped} (skipped)")
+    print(f"  In-process: {result.in_process_skipped} (skipped)")
     print(f"  Classified: {result.classified}")
     print(f"  Unknown:    {result.unclassified}")
     print()

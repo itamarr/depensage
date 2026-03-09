@@ -33,7 +33,7 @@ class MonthResult:
 @dataclass
 class PipelineResult:
     total_parsed: int
-    pending_skipped: int
+    in_process_skipped: int
     classified: int
     unclassified: int
     months: list[MonthResult] = field(default_factory=list)
@@ -85,19 +85,19 @@ def run_pipeline(statement_paths, handlers, classifier, year=None):
             dfs.append(df)
 
     if not dfs:
-        return PipelineResult(total_parsed=0, pending_skipped=0,
+        return PipelineResult(total_parsed=0, in_process_skipped=0,
                               classified=0, unclassified=0)
 
     all_transactions = pd.concat(dfs, ignore_index=True).sort_values("date")
     total_parsed = len(all_transactions)
 
-    # 2. Filter pending
-    charged = StatementParser.filter_pending(all_transactions)
-    pending_skipped = total_parsed - len(charged)
+    # 2. Filter in-process transactions
+    charged = StatementParser.filter_in_process(all_transactions)
+    in_process_skipped = total_parsed - len(charged)
 
     if charged.empty:
         return PipelineResult(total_parsed=total_parsed,
-                              pending_skipped=pending_skipped,
+                              in_process_skipped=in_process_skipped,
                               classified=0, unclassified=0)
 
     # 3. Apply year filter
@@ -105,7 +105,7 @@ def run_pipeline(statement_paths, handlers, classifier, year=None):
         charged = charged[charged["date"].dt.year == year].reset_index(drop=True)
         if charged.empty:
             return PipelineResult(total_parsed=total_parsed,
-                                  pending_skipped=pending_skipped,
+                                  in_process_skipped=in_process_skipped,
                                   classified=0, unclassified=0)
 
     # 4. Classify
@@ -227,7 +227,7 @@ def run_pipeline(statement_paths, handlers, classifier, year=None):
 
     return PipelineResult(
         total_parsed=total_parsed,
-        pending_skipped=pending_skipped,
+        in_process_skipped=in_process_skipped,
         classified=classified_count,
         unclassified=unclassified_count,
         months=month_results,
