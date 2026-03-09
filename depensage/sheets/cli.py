@@ -73,8 +73,17 @@ def get_handlers_for_pipeline(args):
     year = getattr(args, "year", None)
 
     if year:
-        spreadsheet_id = get_spreadsheet_id(year, settings)
-        return {int(year): _authenticate_handler(spreadsheet_id, credentials)}
+        year_int = int(year)
+        handlers = {year_int: _authenticate_handler(
+            get_spreadsheet_id(year, settings), credentials
+        )}
+        # Include previous year if configured (needed for Jan carryover)
+        prev_year = str(year_int - 1)
+        if prev_year in spreadsheets:
+            handlers[year_int - 1] = _authenticate_handler(
+                spreadsheets[prev_year], credentials
+            )
+        return handlers
 
     # All years
     handlers = {}
