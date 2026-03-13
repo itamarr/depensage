@@ -14,12 +14,14 @@ flake8 depensage/ && black depensage/  # Lint and format
 ## CLI
 
 ```bash
-# Main pipeline
-python -m depensage.sheets.cli process statement1.xlsx [statement2.xlsx ...]
+# Main pipeline (CC statements and/or bank transcripts, auto-detected)
+python -m depensage.sheets.cli process statement1.xlsx [bank_transcript.xlsx ...]
 python -m depensage.sheets.cli --year 2026 process statement.xlsx
 
-# Review unknown merchants
-python -m depensage.sheets.cli review statement.xlsx
+# Review unknown merchants/actions
+python -m depensage.sheets.cli review statement.xlsx           # CC merchants
+python -m depensage.sheets.cli review-bank transcript.xlsx     # Bank expenses
+python -m depensage.sheets.cli review-income transcript.xlsx   # Income
 
 # Lookup table management
 python -m depensage.sheets.cli build-lookup [--output PATH]
@@ -41,7 +43,7 @@ Override defaults with `--spreadsheet-id` and `--credentials` flags.
 
 **3-layer design**: core library (no I/O, no prompts) → CLI (dev/testing) → web app (end product). All business logic in core modules; CLI and web app are thin wrappers.
 
-**Modules**: `engine/` (parser, pipeline, dedup, formatter, carryover), `classifier/` (lookup-based), `sheets/` (Google Sheets API + CLI), `config/` (settings), `scripts/` (migrations).
+**Modules**: `engine/` (parser, bank_parser, pipeline, dedup, formatter, carryover), `classifier/` (lookup-based: CC, bank, income), `sheets/` (Google Sheets API + CLI), `config/` (settings), `scripts/` (migrations).
 
 ## Key Conventions
 

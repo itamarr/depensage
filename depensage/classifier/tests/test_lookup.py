@@ -7,7 +7,7 @@ import unittest
 
 import pandas as pd
 
-from depensage.classifier.lookup import LookupClassifier, Classification
+from depensage.classifier.cc_lookup import LookupClassifier, Classification
 
 
 class TestLookupClassifier(unittest.TestCase):

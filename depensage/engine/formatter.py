@@ -56,3 +56,73 @@ def format_for_sheet(transactions, billing_day=DEFAULT_BILLING_DAY):
         ])
 
     return rows
+
+
+def format_bank_expenses_for_sheet(transactions):
+    """Format bank expense transactions into 7-column rows matching B–H.
+
+    Each row: [business_name, notes, subcategory, amount, category, date, "BANK"]
+
+    All bank expenses are marked "BANK" (always charged to bank directly).
+
+    Args:
+        transactions: DataFrame with columns date, amount,
+                      and optionally category, subcategory, business_name.
+
+    Returns:
+        List of 7-element lists.
+    """
+    if transactions is None or transactions.empty:
+        return []
+
+    rows = []
+    for _, tx in transactions.iterrows():
+        date_str = SheetUtils.format_date_for_sheet(tx["date"])
+        amount_str = f"{tx['amount']:.2f}"
+        category = tx.get("category", "") or ""
+        subcategory = tx.get("subcategory", "") or ""
+        business_name = tx.get("business_name", "") or ""
+
+        rows.append([
+            business_name,   # B
+            "",              # C (notes)
+            subcategory,     # D
+            amount_str,      # E
+            category,        # F
+            date_str,        # G
+            "BANK",          # H
+        ])
+
+    return rows
+
+
+def format_income_for_sheet(income_transactions):
+    """Format income transactions into 4-column rows matching sheet columns D–G.
+
+    Each row: [comments, amount, category, date]
+
+    Args:
+        income_transactions: DataFrame with columns date, amount,
+                             and optionally category, comments.
+
+    Returns:
+        List of 4-element lists.
+    """
+    if income_transactions is None or income_transactions.empty:
+        return []
+
+    rows = []
+    for _, tx in income_transactions.iterrows():
+        date_str = SheetUtils.format_date_for_sheet(tx["date"])
+        amount_str = f"{tx['amount']:.2f}"
+        category = tx.get("category", "") or ""
+        comments = tx.get("comments", "") or ""
+
+        rows.append([
+            comments,    # D
+            amount_str,  # E
+            category,    # F
+            date_str,    # G
+        ])
+
+    return rows

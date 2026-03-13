@@ -9,7 +9,8 @@ import tempfile
 import pandas as pd
 
 from depensage.engine.pipeline import run_pipeline
-from depensage.classifier.lookup import ClassificationResult
+from depensage.engine.bank_parser import BANK_TRANSCRIPT_SIGNATURE
+from depensage.classifier.cc_lookup import ClassificationResult
 
 
 def _write_excel(rows, headers, title_row="Account holder info"):
@@ -21,6 +22,27 @@ def _write_excel(rows, headers, title_row="Account holder info"):
         title_df = pd.DataFrame([[title_row]])
         title_df.to_excel(writer, index=False, header=False, startrow=0)
         df.to_excel(writer, index=False, startrow=1)
+    return f.name
+
+
+def _write_bank_excel(data_rows):
+    """Write an Excel file matching Israeli bank transcript format."""
+    headers = ["תאריך", "הפעולה", "פרטים", "אסמכתא", "חובה", "זכות",
+               "יתרה בש''ח", "תאריך ערך", "לטובת", "עבור"]
+    ncols = len(headers)
+    all_rows = [
+        [""] * ncols,
+        [""] * ncols,
+        [BANK_TRANSCRIPT_SIGNATURE] + [""] * (ncols - 1),
+        ["12-702-12345"] + [""] * (ncols - 1),
+        headers,
+    ]
+    all_rows.extend(data_rows)
+    f = tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx")
+    f.close()
+    with pd.ExcelWriter(f.name, engine="openpyxl") as writer:
+        df = pd.DataFrame(all_rows)
+        df.to_excel(writer, index=False, header=False)
     return f.name
 
 
@@ -243,6 +265,223 @@ class TestPipeline(unittest.TestCase):
         with self.assertRaises(ValueError) as ctx:
             run_pipeline([path], handlers, self.classifier)
         self.assertIn("2026", str(ctx.exception))
+
+
+class TestPipelineBankTransactions(unittest.TestCase):
+    """Test pipeline handling of bank transcript files."""
+
+    def setUp(self):
+        self.handler = MagicMock()
+        self.classifier = MagicMock()
+        self.bank_classifier = MagicMock()
+        self.income_classifier = MagicMock()
+        self.temp_files = []
+
+        # Default handler behavior
+        self.handler.get_or_create_month_sheet.return_value = "January"
+        self.handler.sheet_exists.return_value = False  # no prev month
+        self.handler.find_section_marker.return_value = 131
+        self.handler.read_expense_rows.return_value = []
+        self.handler.read_income_rows.return_value = []
+        self.handler.find_first_empty_expense_row.return_value = 2
+        self.handler.find_first_empty_income_row.return_value = 140
+        self.handler.insert_rows.return_value = True
+        self.handler.write_expense_rows.return_value = True
+        self.handler.write_income_rows.return_value = True
+
+        # CC classifier (no CC files in these tests)
+        self.classifier.classify.return_value = ClassificationResult(
+            classified=pd.DataFrame(), unclassified=pd.DataFrame()
+        )
+
+    def tearDown(self):
+        for f in self.temp_files:
+            os.unlink(f)
+
+    def _bank_excel(self, rows):
+        path = _write_bank_excel(rows)
+        self.temp_files.append(path)
+        return path
+
+    def _setup_bank_classifier_all(self):
+        def classify_fn(df):
+            classified = df.copy()
+            classified["category"] = "חשבונות"
+            classified["subcategory"] = ""
+            classified["business_name"] = classified["action"]
+            return ClassificationResult(
+                classified=classified, unclassified=pd.DataFrame()
+            )
+        self.bank_classifier.classify.side_effect = classify_fn
+
+    def _setup_income_classifier_all(self):
+        def classify_fn(df):
+            classified = df.copy()
+            classified["category"] = "משכורת"
+            classified["comments"] = classified["action"]
+            return ClassificationResult(
+                classified=classified, unclassified=pd.DataFrame()
+            )
+        self.income_classifier.classify.side_effect = classify_fn
+
+    def test_bank_expenses_written(self):
+        """Bank expenses are written with BANK status."""
+        path = self._bank_excel([
+            ["01/01/2026", "מכבי", "", "123", 300, "", 5000, "", "", ""],
+        ])
+        self._setup_bank_classifier_all()
+        self._setup_income_classifier_all()
+
+        # savings marker for income section
+        self.handler.find_section_marker.side_effect = (
+            lambda sheet, section: 131 if section == "budget" else 160
+        )
+
+        result = run_pipeline(
+            [path], self.handler, self.classifier, year=2026,
+            bank_classifier=self.bank_classifier,
+            income_classifier=self.income_classifier,
+        )
+
+        self.assertEqual(result.total_parsed, 1)
+        self.assertEqual(len(result.months), 1)
+        self.assertEqual(result.months[0].written, 1)
+        # Check BANK status in written rows
+        written_rows = self.handler.write_expense_rows.call_args[0][2]
+        self.assertEqual(written_rows[0][6], "BANK")  # col H
+
+    def test_bank_income_written(self):
+        """Bank income is written to the income section."""
+        path = self._bank_excel([
+            ["01/01/2026", "מלאנוקס טכנולו", "emp123", "456", "", 25000,
+             30000, "", "", ""],
+        ])
+        self._setup_bank_classifier_all()
+        self._setup_income_classifier_all()
+
+        self.handler.find_section_marker.side_effect = (
+            lambda sheet, section: 131 if section == "budget" else 160
+        )
+
+        result = run_pipeline(
+            [path], self.handler, self.classifier, year=2026,
+            bank_classifier=self.bank_classifier,
+            income_classifier=self.income_classifier,
+        )
+
+        self.assertEqual(result.total_parsed, 1)
+        self.assertEqual(len(result.months), 1)
+        self.assertEqual(result.months[0].income_written, 1)
+        self.handler.write_income_rows.assert_called_once()
+
+    def test_cc_lump_sums_extracted(self):
+        """CC lump sum charges are extracted but not written."""
+        path = self._bank_excel([
+            ["01/10/2026", "כרטיסי אשראי ל-10", "", "789", 5000, "",
+             -5000, "", "", ""],
+            ["01/01/2026", "מכבי", "", "123", 300, "", 5000, "", "", ""],
+        ])
+        self._setup_bank_classifier_all()
+        self._setup_income_classifier_all()
+
+        self.handler.find_section_marker.side_effect = (
+            lambda sheet, section: 131 if section == "budget" else 160
+        )
+
+        result = run_pipeline(
+            [path], self.handler, self.classifier, year=2026,
+            bank_classifier=self.bank_classifier,
+            income_classifier=self.income_classifier,
+        )
+
+        self.assertIn(5000.0, result.cc_lump_sums)
+        # Only the expense should be written, not the CC lump sum
+        self.assertEqual(result.months[0].written, 1)
+
+    def test_mixed_cc_and_bank(self):
+        """Pipeline handles both CC and bank files together."""
+        cc_path = _write_excel(
+            [["01/05/2026", "Shop A", 100.50]],
+            ["תאריך", "שם בית עסק", "סכום"],
+        )
+        self.temp_files.append(cc_path)
+        bank_path = self._bank_excel([
+            ["01/15/2026", "ביטוח לאומי", "", "123", 400, "", 5000,
+             "", "", ""],
+        ])
+
+        # CC classifier
+        def cc_classify(df):
+            classified = df.copy()
+            classified["category"] = "סופר"
+            classified["subcategory"] = ""
+            return ClassificationResult(
+                classified=classified, unclassified=pd.DataFrame()
+            )
+        self.classifier.classify.side_effect = cc_classify
+
+        self._setup_bank_classifier_all()
+        self._setup_income_classifier_all()
+
+        self.handler.find_section_marker.side_effect = (
+            lambda sheet, section: 131 if section == "budget" else 160
+        )
+
+        result = run_pipeline(
+            [cc_path, bank_path], self.handler, self.classifier, year=2026,
+            bank_classifier=self.bank_classifier,
+            income_classifier=self.income_classifier,
+        )
+
+        self.assertEqual(result.total_parsed, 2)
+        self.assertEqual(result.classified, 2)
+        self.assertEqual(result.months[0].written, 2)
+
+    def test_bank_income_dedup(self):
+        """Duplicate income transactions are not written again."""
+        path = self._bank_excel([
+            ["01/01/2026", "מלאנוקס טכנולו", "emp123", "456", "", 25000,
+             30000, "", "", ""],
+        ])
+        self._setup_bank_classifier_all()
+        self._setup_income_classifier_all()
+
+        self.handler.find_section_marker.side_effect = (
+            lambda sheet, section: 131 if section == "budget" else 160
+        )
+        # Existing income row matches
+        self.handler.read_income_rows.return_value = [
+            ["מלאנוקס טכנולו", "25000.00", "משכורת", "01/01/2026"],
+        ]
+
+        result = run_pipeline(
+            [path], self.handler, self.classifier, year=2026,
+            bank_classifier=self.bank_classifier,
+            income_classifier=self.income_classifier,
+        )
+
+        self.assertEqual(result.months[0].income_written, 0)
+        self.assertEqual(result.months[0].income_duplicates, 1)
+        self.handler.write_income_rows.assert_not_called()
+
+    def test_no_bank_classifiers_writes_empty_categories(self):
+        """Bank transactions without classifiers get empty categories."""
+        path = self._bank_excel([
+            ["01/01/2026", "מכבי", "", "123", 300, "", 5000, "", "", ""],
+        ])
+
+        self.handler.find_section_marker.side_effect = (
+            lambda sheet, section: 131 if section == "budget" else 160
+        )
+
+        result = run_pipeline(
+            [path], self.handler, self.classifier, year=2026,
+        )
+
+        self.assertEqual(result.total_parsed, 1)
+        self.assertEqual(result.unclassified, 1)
+        # Should still write with empty category
+        self.assertEqual(result.months[0].written, 1)
 
 
 if __name__ == "__main__":

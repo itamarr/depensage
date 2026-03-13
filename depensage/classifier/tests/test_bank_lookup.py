@@ -9,10 +9,8 @@ import unittest
 
 import pandas as pd
 
-from depensage.classifier.bank_lookup import (
-    BankLookupClassifier,
-    IncomeLookupClassifier,
-)
+from depensage.classifier.bank_lookup import BankLookupClassifier
+from depensage.classifier.income_lookup import IncomeLookupClassifier
 
 
 class TestBankLookupClassifier(unittest.TestCase):

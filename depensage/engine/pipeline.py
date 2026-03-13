@@ -1,7 +1,7 @@
 """
 Core automated expense pipeline.
 
-Parses CC statements, filters pending transactions, classifies merchants,
+Parses CC and bank statements, filters in-process transactions, classifies,
 deduplicates against existing sheet data, and writes to the correct
 monthly Google Sheets.
 """
@@ -12,12 +12,16 @@ from dataclasses import dataclass, field
 import pandas as pd
 
 from depensage.engine.statement_parser import StatementParser
-from depensage.engine.dedup import deduplicate
-from depensage.engine.formatter import format_for_sheet
+from depensage.engine.bank_parser import (
+    detect_bank_transcript, parse_bank_transcript, BankParseResult,
+)
+from depensage.engine.dedup import deduplicate, deduplicate_income
+from depensage.engine.formatter import (
+    format_for_sheet, format_bank_expenses_for_sheet, format_income_for_sheet,
+)
 from depensage.engine.carryover import run_carryover, get_previous_month
 from depensage.sheets.spreadsheet_handler import SheetHandler, SECTION_MARKERS
 from depensage.sheets.sheet_utils import SheetUtils
-from depensage.classifier.lookup import LookupClassifier
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +32,8 @@ class MonthResult:
     year: int
     written: int
     duplicates: int
+    income_written: int = 0
+    income_duplicates: int = 0
 
 
 @dataclass
@@ -38,18 +44,22 @@ class PipelineResult:
     unclassified: int
     months: list[MonthResult] = field(default_factory=list)
     unclassified_merchants: list[str] = field(default_factory=list)
+    cc_lump_sums: list[float] = field(default_factory=list)
 
 
-def run_pipeline(statement_paths, handlers, classifier, year=None):
-    """Run the full expense processing pipeline.
+def run_pipeline(statement_paths, handlers, classifier, year=None,
+                 bank_classifier=None, income_classifier=None):
+    """Run the full expense and income processing pipeline.
 
     Args:
-        statement_paths: List of file paths to CC statement files.
+        statement_paths: List of file paths (CC statements and/or bank transcripts).
         handlers: Dict mapping year (int) to authenticated SheetHandler,
                   or a single SheetHandler (used for all years).
-        classifier: LookupClassifier instance.
+        classifier: LookupClassifier instance (for CC transactions).
         year: Optional year filter (int). If set, only transactions
               from this year are processed.
+        bank_classifier: BankLookupClassifier instance (for bank expenses).
+        income_classifier: IncomeLookupClassifier instance (for bank income).
 
     Returns:
         PipelineResult with processing statistics.
@@ -59,7 +69,7 @@ def run_pipeline(statement_paths, handlers, classifier, year=None):
     """
     parser = StatementParser()
 
-    # Normalize handlers: dict of {year: handler} or single handler for all years
+    # Normalize handlers
     if isinstance(handlers, dict):
         handler_dict = handlers
         single_handler = None
@@ -77,70 +87,59 @@ def run_pipeline(statement_paths, handlers, classifier, year=None):
             )
         return handler_dict[tx_year]
 
-    # 1. Parse all files and merge
-    dfs = []
+    # 1. Parse all files, auto-detecting format
+    cc_dfs = []
+    bank_expenses = []
+    bank_income = []
+    all_cc_lump_sums = []
+
     for path in statement_paths:
-        df = parser.parse_statement(path)
-        if df is not None and not df.empty:
-            dfs.append(df)
+        if detect_bank_transcript(path):
+            bank_result = parse_bank_transcript(path)
+            if bank_result:
+                if not bank_result.expenses.empty:
+                    bank_expenses.append(bank_result.expenses)
+                if not bank_result.income.empty:
+                    bank_income.append(bank_result.income)
+                all_cc_lump_sums.extend(bank_result.cc_lump_sums)
+        else:
+            df = parser.parse_statement(path)
+            if df is not None and not df.empty:
+                cc_dfs.append(df)
 
-    if not dfs:
-        return PipelineResult(total_parsed=0, in_process_skipped=0,
-                              classified=0, unclassified=0)
+    # 2. Process CC transactions
+    cc_result = _process_cc(cc_dfs, parser, classifier, year)
 
-    all_transactions = pd.concat(dfs, ignore_index=True).sort_values("date")
-    total_parsed = len(all_transactions)
-
-    # 2. Filter in-process transactions
-    charged = StatementParser.filter_in_process(all_transactions)
-    in_process_skipped = total_parsed - len(charged)
-
-    if charged.empty:
-        return PipelineResult(total_parsed=total_parsed,
-                              in_process_skipped=in_process_skipped,
-                              classified=0, unclassified=0)
-
-    # 3. Apply year filter
-    if year is not None:
-        charged = charged[charged["date"].dt.year == year].reset_index(drop=True)
-        if charged.empty:
-            return PipelineResult(total_parsed=total_parsed,
-                                  in_process_skipped=in_process_skipped,
-                                  classified=0, unclassified=0)
-
-    # 4. Classify
-    result = classifier.classify(charged)
-    classified_count = len(result.classified)
-    unclassified_count = len(result.unclassified)
-    unclassified_merchants = (
-        result.unclassified["business_name"].unique().tolist()
-        if not result.unclassified.empty else []
+    # 3. Process bank expenses
+    bank_exp_result = _process_bank_expenses(
+        bank_expenses, bank_classifier, year
     )
 
-    # 5. Recombine: classified + unclassified (with empty category/subcategory)
-    if not result.unclassified.empty:
-        unclassified_with_cols = result.unclassified.copy()
-        unclassified_with_cols["category"] = ""
-        unclassified_with_cols["subcategory"] = ""
-        combined = pd.concat(
-            [result.classified, unclassified_with_cols], ignore_index=True
-        ).sort_values("date")
-    else:
-        combined = result.classified
+    # 4. Process bank income
+    bank_inc_result = _process_bank_income(
+        bank_income, income_classifier, year
+    )
 
-    # 6. Group by year-month
-    combined["_year_month"] = combined["date"].dt.to_period("M")
-    month_results = []
+    total_parsed = cc_result.total_parsed + bank_exp_result.total + bank_inc_result.total
+
+    # 5. Merge all expenses and write by month
+    all_expenses = []
+    if cc_result.cc_expenses is not None and not cc_result.cc_expenses.empty:
+        all_expenses.append(("cc", cc_result.cc_expenses))
+    if bank_exp_result.expenses is not None and not bank_exp_result.expenses.empty:
+        all_expenses.append(("bank", bank_exp_result.expenses))
+
+    # Track month results
+    month_results_map = {}
     sheets_seen = set()
 
-    def _try_carryover(sheet_name, tx_year, get_handler_fn):
-        """Run carryover for a sheet if the previous month exists."""
+    def _try_carryover(sheet_name, tx_year):
         prev_month, year_offset = get_previous_month(sheet_name)
         if prev_month is None:
             return
         prev_year = tx_year + year_offset
         try:
-            prev_handler = get_handler_fn(prev_year)
+            prev_handler = get_handler(prev_year)
         except ValueError:
             logger.info(
                 f"No handler for year {prev_year}, skipping carryover "
@@ -153,83 +152,314 @@ def run_pipeline(statement_paths, handlers, classifier, year=None):
                 f"skipping carryover"
             )
             return
-        dest_handler = get_handler_fn(tx_year)
-        result = run_carryover(prev_handler, prev_month, dest_handler, sheet_name)
+        dest_handler = get_handler(tx_year)
+        result = run_carryover(
+            prev_handler, prev_month, dest_handler, sheet_name
+        )
         logger.info(
             f"Carryover {prev_month} → {sheet_name}: "
             f"{result['budget_lines']} budget, "
             f"{result['savings_lines']} savings"
         )
 
-    for period, group in combined.groupby("_year_month"):
-        sample_date = group["date"].iloc[0]
-        tx_year = sample_date.year
+    def _ensure_sheet(sample_date, tx_year):
+        """Get or create month sheet, run carryover if new."""
         handler = get_handler(tx_year)
-
         expected_name = SheetUtils.get_sheet_name_for_date(sample_date)
-        is_new_sheet = expected_name and not handler.sheet_exists(expected_name)
-
+        is_new = expected_name and not handler.sheet_exists(expected_name)
         sheet_name = handler.get_or_create_month_sheet(sample_date)
-
         if not sheet_name:
-            logger.error(f"Failed to get/create sheet for {period}")
-            continue
-
-        # Run carryover on newly created sheets (once per sheet)
-        if is_new_sheet and sheet_name not in sheets_seen:
+            return None
+        if is_new and sheet_name not in sheets_seen:
             sheets_seen.add(sheet_name)
-            _try_carryover(sheet_name, tx_year, get_handler)
+            _try_carryover(sheet_name, tx_year)
+        return sheet_name
 
-        # Find budget section marker
-        marker_row = handler.find_section_marker(sheet_name, "budget")
-        if marker_row is None:
-            raise ValueError(
-                f"No {SECTION_MARKERS['budget']} marker found in column B of "
-                f"sheet '{sheet_name}'. Run the marker migration script first."
-            )
+    # Write expenses (CC + bank)
+    for source, expenses_df in all_expenses:
+        expenses_df = expenses_df.copy()
+        expenses_df["_year_month"] = expenses_df["date"].dt.to_period("M")
 
-        # Read existing rows for dedup
-        existing_rows = handler.read_expense_rows(sheet_name)
+        for period, group in expenses_df.groupby("_year_month"):
+            sample_date = group["date"].iloc[0]
+            tx_year = sample_date.year
+            handler = get_handler(tx_year)
 
-        # Deduplicate
-        month_txns = group.drop(columns=["_year_month"])
-        new_txns = deduplicate(month_txns, existing_rows)
-        dup_count = len(month_txns) - len(new_txns)
+            sheet_name = _ensure_sheet(sample_date, tx_year)
+            if not sheet_name:
+                logger.error(f"Failed to get/create sheet for {period}")
+                continue
 
-        if new_txns.empty:
-            month_results.append(MonthResult(
-                month=sheet_name, year=tx_year, written=0, duplicates=dup_count
-            ))
-            continue
+            marker_row = handler.find_section_marker(sheet_name, "budget")
+            if marker_row is None:
+                raise ValueError(
+                    f"No {SECTION_MARKERS['budget']} marker found in "
+                    f"sheet '{sheet_name}'."
+                )
 
-        # Format for sheet
-        formatted = format_for_sheet(new_txns)
+            existing_rows = handler.read_expense_rows(sheet_name)
+            month_txns = group.drop(columns=["_year_month"])
+            new_txns = deduplicate(month_txns, existing_rows)
+            dup_count = len(month_txns) - len(new_txns)
 
-        # Find insertion point
-        first_empty = handler.find_first_empty_expense_row(sheet_name)
-        rows_needed = len(formatted)
-        # Data rows end at marker_row - 2 (total row is marker_row - 1)
-        last_data_row = marker_row - 2
-        available = last_data_row - first_empty + 1
+            key = (sheet_name, tx_year)
+            if key not in month_results_map:
+                month_results_map[key] = MonthResult(
+                    month=sheet_name, year=tx_year, written=0, duplicates=0
+                )
+            month_results_map[key].duplicates += dup_count
 
-        if available < rows_needed:
-            insert_count = rows_needed - available
-            # Insert before the total row to push it and the marker down
-            handler.insert_rows(sheet_name, marker_row - 1, insert_count)
+            if new_txns.empty:
+                continue
 
-        # Write
-        handler.write_expense_rows(sheet_name, first_empty, formatted)
+            if source == "cc":
+                formatted = format_for_sheet(new_txns)
+            else:
+                formatted = format_bank_expenses_for_sheet(new_txns)
 
-        month_results.append(MonthResult(
-            month=sheet_name, year=tx_year,
-            written=len(formatted), duplicates=dup_count
-        ))
+            first_empty = handler.find_first_empty_expense_row(sheet_name)
+            rows_needed = len(formatted)
+            last_data_row = marker_row - 2
+            available = last_data_row - first_empty + 1
+
+            if available < rows_needed:
+                insert_count = rows_needed - available
+                handler.insert_rows(sheet_name, marker_row - 1, insert_count)
+
+            handler.write_expense_rows(sheet_name, first_empty, formatted)
+            month_results_map[key].written += len(formatted)
+
+    # Write income
+    if bank_inc_result.income is not None and not bank_inc_result.income.empty:
+        income_df = bank_inc_result.income.copy()
+        income_df["_year_month"] = income_df["date"].dt.to_period("M")
+
+        for period, group in income_df.groupby("_year_month"):
+            sample_date = group["date"].iloc[0]
+            tx_year = sample_date.year
+            handler = get_handler(tx_year)
+
+            sheet_name = _ensure_sheet(sample_date, tx_year)
+            if not sheet_name:
+                logger.error(f"Failed to get/create sheet for income {period}")
+                continue
+
+            # Dedup income
+            existing_income = handler.read_income_rows(sheet_name)
+            month_income = group.drop(columns=["_year_month"])
+            new_income = deduplicate_income(month_income, existing_income)
+            inc_dup_count = len(month_income) - len(new_income)
+
+            key = (sheet_name, tx_year)
+            if key not in month_results_map:
+                month_results_map[key] = MonthResult(
+                    month=sheet_name, year=tx_year, written=0, duplicates=0
+                )
+            month_results_map[key].income_duplicates += inc_dup_count
+
+            if new_income.empty:
+                continue
+
+            formatted = format_income_for_sheet(new_income)
+
+            # Find insertion point in income section
+            first_empty = handler.find_first_empty_income_row(sheet_name)
+            if first_empty is None:
+                logger.error(
+                    f"Could not find income insertion point in {sheet_name}"
+                )
+                continue
+
+            savings_marker = handler.find_section_marker(sheet_name, "savings")
+            if savings_marker is None:
+                logger.error(f"No savings marker in {sheet_name}")
+                continue
+
+            # Income total row is at savings_marker - 2, data ends before it
+            last_income_data = savings_marker - 3
+            available = last_income_data - first_empty + 1
+
+            if available < len(formatted):
+                insert_count = len(formatted) - available
+                # Insert before the total row (savings_marker - 2)
+                handler.insert_rows(sheet_name, savings_marker - 2, insert_count)
+
+            handler.write_income_rows(sheet_name, first_empty, formatted)
+            month_results_map[key].income_written += len(formatted)
+
+    month_results = sorted(
+        month_results_map.values(),
+        key=lambda m: (m.year, _month_order(m.month))
+    )
 
     return PipelineResult(
         total_parsed=total_parsed,
-        in_process_skipped=in_process_skipped,
-        classified=classified_count,
-        unclassified=unclassified_count,
+        in_process_skipped=cc_result.in_process_skipped,
+        classified=cc_result.classified + bank_exp_result.classified + bank_inc_result.classified,
+        unclassified=cc_result.unclassified + bank_exp_result.unclassified + bank_inc_result.unclassified,
         months=month_results,
+        unclassified_merchants=cc_result.unclassified_merchants,
+        cc_lump_sums=all_cc_lump_sums,
+    )
+
+
+def _month_order(month_name):
+    """Return sort key for English month names."""
+    months = {
+        "January": 1, "February": 2, "March": 3, "April": 4,
+        "May": 5, "June": 6, "July": 7, "August": 8,
+        "September": 9, "October": 10, "November": 11, "December": 12,
+    }
+    return months.get(month_name, 0)
+
+
+@dataclass
+class _CCResult:
+    total_parsed: int
+    in_process_skipped: int
+    classified: int
+    unclassified: int
+    cc_expenses: pd.DataFrame
+    unclassified_merchants: list
+
+
+def _process_cc(cc_dfs, parser, classifier, year):
+    """Process CC statement DataFrames through classification."""
+    if not cc_dfs:
+        return _CCResult(0, 0, 0, 0, pd.DataFrame(), [])
+
+    all_cc = pd.concat(cc_dfs, ignore_index=True).sort_values("date")
+    total = len(all_cc)
+
+    filtered = StatementParser.filter_in_process(all_cc)
+    skipped = total - len(filtered)
+
+    if filtered.empty:
+        return _CCResult(total, skipped, 0, 0, pd.DataFrame(), [])
+
+    if year is not None:
+        filtered = filtered[filtered["date"].dt.year == year].reset_index(drop=True)
+        if filtered.empty:
+            return _CCResult(total, skipped, 0, 0, pd.DataFrame(), [])
+
+    result = classifier.classify(filtered)
+    unclassified_merchants = (
+        result.unclassified["business_name"].unique().tolist()
+        if not result.unclassified.empty else []
+    )
+
+    if not result.unclassified.empty:
+        unc = result.unclassified.copy()
+        unc["category"] = ""
+        unc["subcategory"] = ""
+        combined = pd.concat(
+            [result.classified, unc], ignore_index=True
+        ).sort_values("date")
+    else:
+        combined = result.classified
+
+    return _CCResult(
+        total_parsed=total,
+        in_process_skipped=skipped,
+        classified=len(result.classified),
+        unclassified=len(result.unclassified),
+        cc_expenses=combined,
         unclassified_merchants=unclassified_merchants,
+    )
+
+
+@dataclass
+class _BankExpResult:
+    total: int
+    classified: int
+    unclassified: int
+    expenses: pd.DataFrame
+
+
+def _process_bank_expenses(bank_dfs, bank_classifier, year):
+    """Process bank expense DataFrames through classification."""
+    if not bank_dfs:
+        return _BankExpResult(0, 0, 0, pd.DataFrame())
+
+    all_bank = pd.concat(bank_dfs, ignore_index=True).sort_values("date")
+
+    if year is not None:
+        all_bank = all_bank[all_bank["date"].dt.year == year].reset_index(drop=True)
+
+    total = len(all_bank)
+
+    if total == 0 or bank_classifier is None:
+        # Without classifier, write with empty categories
+        if total > 0:
+            all_bank["category"] = ""
+            all_bank["subcategory"] = ""
+            all_bank["business_name"] = all_bank["action"]
+        return _BankExpResult(total, 0, total, all_bank)
+
+    result = bank_classifier.classify(all_bank)
+
+    if not result.unclassified.empty:
+        unc = result.unclassified.copy()
+        unc["category"] = ""
+        unc["subcategory"] = ""
+        unc["business_name"] = unc["action"]
+        combined = pd.concat(
+            [result.classified, unc], ignore_index=True
+        ).sort_values("date")
+    else:
+        combined = result.classified
+
+    return _BankExpResult(
+        total=total,
+        classified=len(result.classified),
+        unclassified=len(result.unclassified),
+        expenses=combined,
+    )
+
+
+@dataclass
+class _BankIncResult:
+    total: int
+    classified: int
+    unclassified: int
+    income: pd.DataFrame
+
+
+def _process_bank_income(income_dfs, income_classifier, year):
+    """Process bank income DataFrames through classification."""
+    if not income_dfs:
+        return _BankIncResult(0, 0, 0, pd.DataFrame())
+
+    all_income = pd.concat(income_dfs, ignore_index=True).sort_values("date")
+
+    if year is not None:
+        all_income = all_income[
+            all_income["date"].dt.year == year
+        ].reset_index(drop=True)
+
+    total = len(all_income)
+
+    if total == 0 or income_classifier is None:
+        if total > 0:
+            all_income["category"] = ""
+            all_income["comments"] = all_income["action"]
+        return _BankIncResult(total, 0, total, all_income)
+
+    result = income_classifier.classify(all_income)
+
+    if not result.unclassified.empty:
+        unc = result.unclassified.copy()
+        unc["category"] = ""
+        unc["comments"] = unc["action"]
+        combined = pd.concat(
+            [result.classified, unc], ignore_index=True
+        ).sort_values("date")
+    else:
+        combined = result.classified
+
+    return _BankIncResult(
+        total=total,
+        classified=len(result.classified),
+        unclassified=len(result.unclassified),
+        income=combined,
     )
