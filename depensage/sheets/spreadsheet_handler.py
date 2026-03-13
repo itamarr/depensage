@@ -488,6 +488,106 @@ class SheetHandler:
             logger.error(f"Failed to write expense rows: {e}")
             return False
 
+    def read_income_rows(self, sheet_name):
+        """Read income data rows (D to G, between income marker and total).
+
+        The income section layout:
+          marker row:   ---INCOME---
+          marker + 1:   הכנסות header
+          marker + 2:   column headers (הערות, כמה, קטגוריה, תאריך)
+          marker + 3+:  data rows
+          total row:    סה"כ in column G
+
+        Uses UNFORMATTED_VALUE so dates come as serial numbers and
+        amounts as raw numbers.
+
+        Returns:
+            List of rows, each [comments, amount, category, date_serial].
+            Returns empty list if marker not found.
+        """
+        income_marker = self.find_section_marker(sheet_name, "income")
+        savings_marker = self.find_section_marker(sheet_name, "savings")
+        if not income_marker or not savings_marker:
+            return []
+        first_data = income_marker + 3
+        # Total row is at savings_marker - 2 (marker-1 is total, data ends before)
+        last_data = savings_marker - 3
+        if last_data < first_data:
+            return []
+        try:
+            result = self.sheets_service.values().get(
+                spreadsheetId=self.spreadsheet_id,
+                range=f'{sheet_name}!D{first_data}:G{last_data}',
+                valueRenderOption='UNFORMATTED_VALUE',
+            ).execute()
+            return result.get('values', [])
+        except Exception as e:
+            logger.error(f"Failed to read income rows from {sheet_name}: {e}")
+            return []
+
+    def find_first_empty_income_row(self, sheet_name):
+        """Find first empty row in the income section.
+
+        Scans column G (date) in the income data area.
+
+        Returns:
+            1-based row number, or None if markers not found.
+        """
+        income_marker = self.find_section_marker(sheet_name, "income")
+        savings_marker = self.find_section_marker(sheet_name, "savings")
+        if not income_marker or not savings_marker:
+            return None
+        first_data = income_marker + 3
+        # savings_marker - 2 is the total row, data ends before it
+        last_data = savings_marker - 3
+        if last_data < first_data:
+            return first_data
+        values = self.get_sheet_values(sheet_name, f'G{first_data}:G{last_data}')
+        if not values:
+            return first_data
+        for i, row in enumerate(values):
+            if not row or not row[0]:
+                return i + first_data
+        # All rows filled — next row after data
+        return len(values) + first_data
+
+    def write_income_rows(self, sheet_name, start_row, rows):
+        """Write income rows to columns D–G.
+
+        Args:
+            sheet_name: Name of the sheet.
+            start_row: 1-based row to start writing.
+            rows: List of 4-element lists [D(comments), E(amount), F(category), G(date)].
+
+        Returns:
+            True if successful, False otherwise.
+        """
+        try:
+            if not self.sheets_service:
+                logger.error("Sheets service not initialized.")
+                return False
+
+            if not rows:
+                return True
+
+            end_row = start_row + len(rows) - 1
+            range_str = f'{sheet_name}!D{start_row}:G{end_row}'
+
+            body = {'values': rows}
+            result = self.sheets_service.values().update(
+                spreadsheetId=self.spreadsheet_id,
+                range=range_str,
+                valueInputOption='USER_ENTERED',
+                body=body,
+            ).execute()
+
+            logger.info(f"Wrote {result.get('updatedCells')} income cells to {range_str}")
+            return True
+
+        except Exception as e:
+            logger.error(f"Failed to write income rows: {e}")
+            return False
+
     def extract_historical_data(self):
         """
         Extract historical transaction data from all month sheets.

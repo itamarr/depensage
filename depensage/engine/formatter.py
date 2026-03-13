@@ -18,8 +18,9 @@ def format_for_sheet(transactions, billing_day=DEFAULT_BILLING_DAY):
 
     Each row: [business_name, notes, subcategory, amount, category, date, status]
 
-    Status is "CHARGED" if the transaction date's day-of-month <= billing_day,
-    empty string otherwise (pending — will be charged next billing cycle).
+    Status is "CC" if the transaction date's day-of-month <= billing_day
+    (charged in current billing cycle), empty string otherwise (pending —
+    will be charged next billing cycle). Bank transactions use "BANK" instead.
 
     For unclassified transactions, category and subcategory are empty strings.
     Date formatted as MM/DD/YYYY.
@@ -42,7 +43,7 @@ def format_for_sheet(transactions, billing_day=DEFAULT_BILLING_DAY):
         category = tx.get("category", "") or ""
         subcategory = tx.get("subcategory", "") or ""
         business_name = tx.get("business_name", "") or ""
-        status = "CHARGED" if tx["date"].day <= billing_day else ""
+        status = "CC" if tx["date"].day <= billing_day else ""
 
         rows.append([
             business_name,   # B

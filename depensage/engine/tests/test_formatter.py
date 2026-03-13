@@ -28,7 +28,7 @@ class TestFormatForSheet(unittest.TestCase):
         self.assertEqual(result[0][3], "100.50")
         self.assertEqual(result[0][4], "סופר")
         self.assertEqual(result[0][5], "02/01/2024")
-        self.assertEqual(result[0][6], "CHARGED")  # day 1 <= 10
+        self.assertEqual(result[0][6], "CC")  # day 1 <= 10
 
     def test_unclassified_rows(self):
         df = pd.DataFrame({
@@ -69,7 +69,7 @@ class TestFormatForSheet(unittest.TestCase):
             "amount": [10.00],
         })
         result = format_for_sheet(df, billing_day=10)
-        self.assertEqual(result[0][6], "CHARGED")
+        self.assertEqual(result[0][6], "CC")
 
     def test_pending_status_after_billing_day(self):
         """Transactions after billing day are pending (empty status)."""
@@ -89,7 +89,7 @@ class TestFormatForSheet(unittest.TestCase):
             "amount": [10.00, 20.00],
         })
         result = format_for_sheet(df, billing_day=15)
-        self.assertEqual(result[0][6], "CHARGED")  # day 15 <= 15
+        self.assertEqual(result[0][6], "CC")  # day 15 <= 15
         self.assertEqual(result[1][6], "")  # day 16 > 15
 
     def test_mixed_charged_and_pending(self):
@@ -100,9 +100,9 @@ class TestFormatForSheet(unittest.TestCase):
             "amount": [10.00, 20.00, 30.00],
         })
         result = format_for_sheet(df)
-        self.assertEqual(result[0][6], "CHARGED")  # day 5
+        self.assertEqual(result[0][6], "CC")  # day 5
         self.assertEqual(result[1][6], "")          # day 15
-        self.assertEqual(result[2][6], "CHARGED")   # day 10 (exact)
+        self.assertEqual(result[2][6], "CC")   # day 10 (exact)
 
 
 if __name__ == "__main__":
