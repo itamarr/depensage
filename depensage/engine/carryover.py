@@ -203,10 +203,44 @@ def _write_budget_accumulated_static(handler, sheet_name, carry_values):
     return written
 
 
-def _write_savings_accumulated(handler, sheet_name, savings_totals):
-    """Write carry-over savings totals to Accumulated (F) column.
+def _write_savings_carry_formulas(handler, dest_month, source_month):
+    """Write carry-over formulas to savings Accumulated (F) column.
 
-    Matches by goal name in column G.
+    For each savings goal row, writes a formula referencing the source
+    month's Total (C) column at the same row. Layout is identical
+    across months.
+    """
+    start_row, rows = handler.read_section_range(
+        dest_month, "savings", "A:G", end_section="reconciliation"
+    )
+    if not rows:
+        logger.error(f"Could not read savings section in {dest_month}")
+        return 0
+
+    written = 0
+    for i, row in enumerate(rows):
+        if len(row) < 7:
+            continue
+        goal = str(row[6]).strip() if row[6] else ""
+
+        # Skip header, marker, label, and total rows
+        if not goal or goal in ("קטגוריה", "סה\"כ", 'סה"כ', "חסכון"):
+            continue
+        if goal.startswith("---") or goal.startswith("הערה") or goal.startswith("העברה"):
+            continue
+
+        actual_row = start_row + i
+        formula = f"='{source_month}'!C{actual_row}"
+        if handler.update_cell(dest_month, f"F{actual_row}", formula):
+            written += 1
+
+    return written
+
+
+def _write_savings_accumulated_static(handler, sheet_name, savings_totals):
+    """Write carry-over savings totals to Accumulated (F) column (static).
+
+    Used for cross-year carryover. Matches by goal name in column G.
     """
     start_row, rows = handler.read_section_range(
         sheet_name, "savings", "A:G", end_section="reconciliation"
@@ -330,17 +364,26 @@ def run_carryover(source_handler, source_month, dest_handler, dest_month):
         )
         logger.info(f"Wrote {budget_written} budget accumulated values to {dest_month}")
 
-    # 2. Read source savings totals
-    savings_totals = _read_savings_totals(source_handler, source_month)
-    logger.info(f"Read {len(savings_totals)} savings goals from {source_month}")
+    # 2. Write savings carry to destination
+    if same_spreadsheet:
+        savings_written = _write_savings_carry_formulas(
+            dest_handler, dest_month, source_month
+        )
+        logger.info(
+            f"Wrote {savings_written} savings carry formulas "
+            f"(='{source_month}'!C...) to {dest_month}"
+        )
+    else:
+        savings_totals = _read_savings_totals(source_handler, source_month)
+        logger.info(f"Read {len(savings_totals)} savings goals from {source_month}")
+        savings_written = _write_savings_accumulated_static(
+            dest_handler, dest_month, savings_totals
+        )
+        logger.info(f"Wrote {savings_written} savings accumulated values to {dest_month}")
 
     # 3. Read source income total
     income_total = _read_income_total(source_handler, source_month)
     logger.info(f"Source income total: {income_total}")
-
-    # 5. Write savings accumulated to destination
-    savings_written = _write_savings_accumulated(dest_handler, dest_month, savings_totals)
-    logger.info(f"Wrote {savings_written} savings accumulated values to {dest_month}")
 
     # 6. Set savings budget line so total budget = source income
     savings_budget_set = _write_savings_budget_from_income(
