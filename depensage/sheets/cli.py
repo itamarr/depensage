@@ -11,8 +11,8 @@ import sys
 from depensage.classifier.cc_lookup import DEFAULT_LOOKUP_PATH
 from depensage.sheets.cli_commands import (
     cmd_list_sheets, cmd_read, cmd_formulas, cmd_metadata,
-    cmd_build_lookup, cmd_process, cmd_carryover, cmd_consolidate_patterns,
-    cmd_verify,
+    cmd_build_lookup, cmd_process, cmd_commit, cmd_carryover,
+    cmd_consolidate_patterns, cmd_verify,
 )
 from depensage.sheets.cli_review import (
     cmd_review, cmd_review_bank, cmd_review_income,
@@ -85,6 +85,13 @@ def main():
     carryover_parser.add_argument("--source-year", help="Source year (default: --year)")
     carryover_parser.add_argument("--dest-year", help="Destination year (default: --year)")
 
+    commit_parser = subparsers.add_parser(
+        "commit", help="Commit an edited staged XLSX to the spreadsheet"
+    )
+    commit_parser.add_argument(
+        "xlsx", help="Path to the staged XLSX file"
+    )
+
     verify_parser = subparsers.add_parser(
         "verify", help="Verify CC charges against bank lump sums"
     )
@@ -112,6 +119,7 @@ def main():
         "review-bank": cmd_review_bank,
         "review-income": cmd_review_income,
         "process": cmd_process,
+        "commit": cmd_commit,
         "carryover": cmd_carryover,
         "verify": cmd_verify,
         "consolidate-patterns": cmd_consolidate_patterns,

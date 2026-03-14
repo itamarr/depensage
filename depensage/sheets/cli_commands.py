@@ -138,8 +138,25 @@ def cmd_process(args):
         print("\nNothing to write (all duplicates or empty).")
         return
 
+    # Fetch categories with subcategories for XLSX highlighting
+    categories_with_subcats = set()
+    try:
+        # Use any handler to read the Categories sheet
+        if isinstance(handlers, dict):
+            any_handler = next(iter(handlers.values()))
+        else:
+            any_handler = handlers
+        cats = fetch_categories(any_handler)
+        categories_with_subcats = {
+            cat for cat, subcats in cats.items() if subcats
+        }
+    except Exception:
+        pass  # gracefully degrade — highlight all empty subcats
+
     # Export XLSX for review
-    xlsx_path = staged.export_xlsx()
+    xlsx_path = staged.export_xlsx(
+        categories_with_subcats=categories_with_subcats
+    )
     print(f"\nReview staged changes: {xlsx_path}")
 
     auto_confirm = getattr(args, "auto_confirm", False)
@@ -147,10 +164,16 @@ def cmd_process(args):
         result = staged.commit(handlers)
     else:
         try:
-            confirm = input("\nWrite to spreadsheet? [y/N] ")
+            confirm = input("\nWrite to spreadsheet? [y/N/e] ")
         except EOFError:
             confirm = "n"
-        if confirm.strip().lower() != "y":
+        choice = confirm.strip().lower()
+        if choice == "e":
+            year_flag = f"--year {args.year} " if args.year else ""
+            print(f"\nEdit the staged file, then commit:")
+            print(f"  python -m depensage.sheets.cli {year_flag}commit {xlsx_path}")
+            return
+        if choice != "y":
             print("Aborted.")
             return
         result = staged.commit(handlers)
@@ -162,6 +185,170 @@ def cmd_process(args):
             parts.append(
                 f"{mr.income_written} income, {mr.income_duplicates} income dupes"
             )
+        print(f"  {mr.month} {mr.year}: {', '.join(parts)}")
+
+
+def cmd_commit(args):
+    """Commit an edited staged XLSX to the spreadsheet."""
+    from depensage.engine.staging import import_staged_xlsx
+    from depensage.engine.lookup_updater import apply_lookup_updates
+    from depensage.classifier.bank_lookup import BankLookupClassifier
+    from depensage.classifier.income_lookup import IncomeLookupClassifier
+
+    xlsx_path = args.xlsx
+    if not os.path.exists(xlsx_path):
+        print(f"File not found: {xlsx_path}", file=sys.stderr)
+        sys.exit(1)
+
+    print(f"Reading staged XLSX: {xlsx_path}")
+    stages, changes = import_staged_xlsx(xlsx_path)
+
+    if not stages:
+        print("No data found in XLSX.")
+        return
+
+    # Show what will be committed
+    total_expenses = sum(len(s.new_expenses) for s in stages.values())
+    total_income = sum(len(s.new_income) for s in stages.values())
+    print(f"\nStaged: {total_expenses} expenses, {total_income} income")
+    for ws_name, stage in stages.items():
+        parts = []
+        if stage.new_expenses:
+            parts.append(f"{len(stage.new_expenses)} expenses")
+        if stage.new_income:
+            parts.append(f"{len(stage.new_income)} income")
+        if parts:
+            print(f"  {stage.month} {stage.year}: {', '.join(parts)}")
+
+    # Show changes
+    if changes:
+        print(f"\nCategory changes ({len(changes)}):")
+        for c in changes:
+            source_tag = c.source.upper()
+            old_cat = c.old_category or "(empty)"
+            old_sub = c.old_subcategory or "(empty)"
+            new_cat = c.new_category or "(empty)"
+            new_sub = c.new_subcategory or "(empty)"
+            if c.row_type == "income":
+                print(f"  [{source_tag:>6}] {c.lookup_key}: {old_cat} → {new_cat}")
+            else:
+                cat_change = f"{old_cat} → {new_cat}" if old_cat != new_cat else new_cat
+                sub_change = f"{old_sub} → {new_sub}" if old_sub != new_sub else ""
+                detail = cat_change + (f" / {sub_change}" if sub_change else "")
+                print(f"  [{source_tag:>6}] {c.lookup_key}: {detail}")
+
+        # Prompt for lookup updates
+        try:
+            choice = input(
+                f"\nUpdate lookup for all {len(changes)} change(s)? [y/n/r(eview)] "
+            )
+        except EOFError:
+            choice = "n"
+
+        choice = choice.strip().lower()
+        if choice == "y":
+            cc_cls = LookupClassifier()
+            bank_cls = BankLookupClassifier()
+            income_cls = IncomeLookupClassifier()
+            updated = apply_lookup_updates(changes, cc_cls, bank_cls, income_cls)
+            if updated:
+                print(f"Updated lookup tables: {', '.join(updated)}")
+        elif choice == "r":
+            cc_cls = LookupClassifier()
+            bank_cls = BankLookupClassifier()
+            income_cls = IncomeLookupClassifier()
+            for c in changes:
+                source_tag = c.source.upper()
+                old_display = c.old_category or "(empty)"
+                new_display = c.new_category or "(empty)"
+                print(f"\n  [{source_tag}] {c.lookup_key}: {old_display} → {new_display}")
+                try:
+                    ans = input("  Update lookup? [y/n] ").strip().lower()
+                except EOFError:
+                    ans = "n"
+                if ans == "y" and c.new_category:
+                    apply_lookup_updates([c], cc_cls, bank_cls, income_cls)
+                    print("  → Updated")
+        else:
+            print("Skipping lookup updates.")
+    else:
+        print("\nNo category changes detected.")
+
+    # Commit to spreadsheet
+    handlers = get_handlers_for_pipeline(args)
+
+    # Re-derive write coordinates from the live sheet
+    from depensage.sheets.spreadsheet_handler import SECTION_MARKERS
+
+    if not isinstance(handlers, dict):
+        single = handlers
+        get_h = lambda y: single
+    else:
+        get_h = lambda y: handlers[y]
+
+    for ws_name, stage in stages.items():
+        handler = get_h(stage.year)
+
+        # Expenses
+        if stage.new_expenses:
+            first_empty = handler.find_first_empty_expense_row(stage.month)
+            marker_row = handler.find_section_marker(stage.month, "budget")
+            if marker_row is None:
+                print(f"Warning: No budget marker in {stage.month}, skipping expenses")
+                stage.new_expenses = []
+                continue
+            rows_needed = len(stage.new_expenses)
+            last_data_row = marker_row - 2
+            available = last_data_row - first_empty + 1
+            insert_needed = max(0, rows_needed - available)
+
+            stage.expense_start_row = first_empty
+            stage.expense_insert_needed = insert_needed
+
+        # Income
+        if stage.new_income:
+            first_empty = handler.find_first_empty_income_row(stage.month)
+            if first_empty is None:
+                print(f"Warning: No income insertion point in {stage.month}")
+                stage.new_income = []
+                continue
+            savings_marker = handler.find_section_marker(stage.month, "savings")
+            if savings_marker is None:
+                print(f"Warning: No savings marker in {stage.month}")
+                stage.new_income = []
+                continue
+            last_income_data = savings_marker - 3
+            available = last_income_data - first_empty + 1
+            insert_needed = max(0, len(stage.new_income) - available)
+
+            stage.income_start_row = first_empty
+            stage.income_insert_needed = insert_needed
+
+    # Build a StagedPipelineResult from the imported stages and commit
+    from depensage.engine.staging import StagedPipelineResult
+    staged = StagedPipelineResult()
+    for ws_name, stage in stages.items():
+        key = (stage.month, stage.year)
+        staged.month_stages[key] = stage
+
+    if not staged.has_writes():
+        print("\nNothing to write.")
+        return
+
+    try:
+        confirm = input("\nWrite to spreadsheet? [y/N] ")
+    except EOFError:
+        confirm = "n"
+    if confirm.strip().lower() != "y":
+        print("Aborted.")
+        return
+
+    result = staged.commit(handlers)
+    print(f"\nCommitted:")
+    for mr in result.months:
+        parts = [f"{mr.written} written"]
+        if mr.income_written:
+            parts.append(f"{mr.income_written} income")
         print(f"  {mr.month} {mr.year}: {', '.join(parts)}")
 
 

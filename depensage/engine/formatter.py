@@ -81,16 +81,14 @@ def format_bank_expenses_for_sheet(transactions):
         amount_str = f"{tx['amount']:.2f}"
         category = tx.get("category", "") or ""
         subcategory = tx.get("subcategory", "") or ""
-        business_name = tx.get("business_name", "") or ""
-
         rows.append([
-            business_name,   # B
-            "",              # C (notes)
-            subcategory,     # D
-            amount_str,      # E
-            category,        # F
-            date_str,        # G
-            "BANK",          # H
+            tx["action"],              # B
+            tx.get("details", ""),     # C (notes)
+            subcategory,               # D
+            amount_str,                # E
+            category,                  # F
+            date_str,                  # G
+            "BANK",                    # H
         ])
 
     return rows

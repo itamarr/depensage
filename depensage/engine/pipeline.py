@@ -21,7 +21,7 @@ from depensage.engine.formatter import (
     format_for_sheet, format_bank_expenses_for_sheet, format_income_for_sheet,
 )
 from depensage.engine.carryover import run_carryover, get_previous_month
-from depensage.engine.staging import StagedPipelineResult
+from depensage.engine.staging import StagedPipelineResult, RowMeta
 from depensage.sheets.spreadsheet_handler import SheetHandler, SECTION_MARKERS
 from depensage.sheets.sheet_utils import SheetUtils
 
@@ -239,6 +239,15 @@ def run_pipeline(statement_paths, handlers, classifier, year=None,
 
             insert_needed = max(0, rows_needed - available)
 
+            # Build RowMeta for each formatted row
+            for row in formatted:
+                cat = row[4]   # category
+                sub = row[2]   # subcategory
+                stage.expense_meta.append(RowMeta(
+                    orig_category=cat, orig_subcategory=sub,
+                    needs_review=not cat,
+                ))
+
             stage.new_expenses.extend(formatted)
             stage.expense_start_row = first_empty
             stage.expense_insert_needed += insert_needed
@@ -288,6 +297,15 @@ def run_pipeline(statement_paths, handlers, classifier, year=None,
             last_income_data = savings_marker - 3
             available = last_income_data - first_empty + 1
             insert_needed = max(0, len(formatted) - available)
+
+            # Build RowMeta for income rows
+            for row in formatted:
+                cat = row[2]   # category
+                sub = row[0]   # comments (used as subcategory for income)
+                stage.income_meta.append(RowMeta(
+                    orig_category=cat, orig_subcategory=sub,
+                    needs_review=not cat,
+                ))
 
             stage.new_income.extend(formatted)
             stage.income_start_row = first_empty
@@ -386,7 +404,6 @@ def _process_bank_expenses(bank_dfs, bank_classifier, year):
         if total > 0:
             all_bank["category"] = ""
             all_bank["subcategory"] = ""
-            all_bank["business_name"] = all_bank["action"]
         return _BankExpResult(total, 0, total, all_bank)
 
     result = bank_classifier.classify(all_bank)
@@ -395,7 +412,6 @@ def _process_bank_expenses(bank_dfs, bank_classifier, year):
         unc = result.unclassified.copy()
         unc["category"] = ""
         unc["subcategory"] = ""
-        unc["business_name"] = unc["action"]
         combined = pd.concat(
             [result.classified, unc], ignore_index=True
         ).sort_values("date")

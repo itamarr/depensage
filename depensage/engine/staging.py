@@ -16,12 +16,35 @@ logger = logging.getLogger(__name__)
 
 
 @dataclass
+class RowMeta:
+    """Original classification at staging time, for diff detection."""
+    orig_category: str
+    orig_subcategory: str
+    needs_review: bool = False  # True for unclassified rows
+
+
+@dataclass
+class RowChange:
+    """A classification change detected in the edited XLSX."""
+    month: str
+    row_type: str          # "expense" or "income"
+    source: str            # "cc", "bank", "income"
+    lookup_key: str        # column B (expenses) or column D (income)
+    old_category: str
+    new_category: str
+    old_subcategory: str
+    new_subcategory: str
+
+
+@dataclass
 class MonthStage:
     """Staged writes for a single month sheet."""
     month: str
     year: int
     new_expenses: list[list] = field(default_factory=list)  # B:H rows
     new_income: list[list] = field(default_factory=list)    # D:G rows
+    expense_meta: list[RowMeta] = field(default_factory=list)  # parallel to new_expenses
+    income_meta: list[RowMeta] = field(default_factory=list)   # parallel to new_income
     expense_start_row: int = 0
     income_start_row: int | None = None
     expense_insert_needed: int = 0
@@ -118,17 +141,20 @@ class StagedPipelineResult:
             for stage in self.month_stages.values()
         )
 
-    def export_xlsx(self, path=None):
+    def export_xlsx(self, path=None, categories_with_subcats=None):
         """Export staged changes to XLSX for review.
 
         Args:
             path: Output path. Defaults to .artifacts/staged_<timestamp>.xlsx.
+            categories_with_subcats: Optional set of category names that have
+                subcategories. Used for red-highlighting: empty subcategory is
+                only flagged when the category has defined subcategories.
 
         Returns:
             File path of the exported XLSX.
         """
         import openpyxl
-        from openpyxl.styles import Font, Alignment
+        from openpyxl.styles import Font, Alignment, PatternFill
 
         if path is None:
             os.makedirs(".artifacts", exist_ok=True)
@@ -167,6 +193,8 @@ class StagedPipelineResult:
         expense_headers = ["שם בית עסק", "הערות", "תת קטגוריה", "כמה", "קטגוריה", "תאריך", "סטטוס"]
         income_headers = ["הערות", "כמה", "קטגוריה", "תאריך"]
 
+        red_fill = PatternFill(start_color="FFCCCC", end_color="FFCCCC", fill_type="solid")
+
         for stage in self.sorted_stages():
             if not stage.new_expenses and not stage.new_income:
                 continue
@@ -181,6 +209,16 @@ class StagedPipelineResult:
                     cell.font = bold
                 for row in stage.new_expenses:
                     ws.append(row)
+                # Red-highlight empty category cells, and empty subcategory
+                # only when the category has defined subcategories
+                has_subcats = categories_with_subcats or set()
+                for row_idx in range(2, len(stage.new_expenses) + 2):
+                    cat_cell = ws.cell(row=row_idx, column=5)   # column E = category
+                    sub_cell = ws.cell(row=row_idx, column=3)   # column C = subcategory
+                    if not cat_cell.value:
+                        cat_cell.fill = red_fill
+                    elif not sub_cell.value and cat_cell.value in has_subcats:
+                        sub_cell.fill = red_fill
 
             if stage.new_income:
                 if stage.new_expenses:
@@ -191,6 +229,17 @@ class StagedPipelineResult:
                     cell.font = bold
                 for row in stage.new_income:
                     ws.append(row)
+
+        # Add hidden metadata sheet for edit-back flow
+        meta_ws = wb.create_sheet(title="_row_meta")
+        meta_ws.sheet_state = "hidden"
+        meta_ws.append(["month", "row_type", "row_index", "orig_category", "orig_subcategory"])
+        for stage in self.sorted_stages():
+            ws_name = f"{stage.month[:3]} {stage.year}"
+            for i, meta in enumerate(stage.expense_meta):
+                meta_ws.append([ws_name, "expense", i, meta.orig_category, meta.orig_subcategory])
+            for i, meta in enumerate(stage.income_meta):
+                meta_ws.append([ws_name, "income", i, meta.orig_category, meta.orig_subcategory])
 
         wb.save(path)
         return path
@@ -268,3 +317,145 @@ class StagedPipelineResult:
             unclassified_merchants=self.unclassified_merchants,
             cc_lump_sums=self.cc_lump_sums,
         )
+
+
+def import_staged_xlsx(path):
+    """Read an edited XLSX and reconstruct MonthStage data with change detection.
+
+    Returns:
+        (stages_dict, changes) where:
+        - stages_dict: {month_ws_name: MonthStage} with edited rows
+        - changes: list[RowChange] of classification edits
+    """
+    import openpyxl
+
+    wb = openpyxl.load_workbook(path, data_only=True)
+
+    # Read metadata
+    if "_row_meta" not in wb.sheetnames:
+        raise ValueError("XLSX missing _row_meta sheet — not a staged export")
+
+    meta_ws = wb["_row_meta"]
+    meta_rows = list(meta_ws.iter_rows(min_row=2, values_only=True))
+    # Group by (month, row_type)
+    meta_by_key = {}
+    for row in meta_rows:
+        month, row_type, row_index, orig_cat, orig_sub = row
+        meta_by_key.setdefault((month, row_type), []).append(
+            RowMeta(orig_category=orig_cat or "", orig_subcategory=orig_sub or "")
+        )
+
+    stages = {}
+    changes = []
+
+    for ws_name in wb.sheetnames:
+        if ws_name in ("Summary", "_row_meta"):
+            continue
+
+        ws = wb[ws_name]
+        rows = list(ws.iter_rows(min_row=1, values_only=True))
+        if not rows:
+            continue
+
+        # Parse the sheet: find expense header, expense rows, income header, income rows
+        expense_headers = (
+            "שם בית עסק", "הערות", "תת קטגוריה", "כמה", "קטגוריה", "תאריך", "סטטוס"
+        )
+        income_headers = ("הערות", "כמה", "קטגוריה", "תאריך")
+
+        # Derive month name and year from ws_name (e.g., "Feb 2026")
+        month_abbrevs = {
+            "Jan": "January", "Feb": "February", "Mar": "March",
+            "Apr": "April", "May": "May", "Jun": "June",
+            "Jul": "July", "Aug": "August", "Sep": "September",
+            "Oct": "October", "Nov": "November", "Dec": "December",
+        }
+        parts = ws_name.split()
+        month_name = month_abbrevs.get(parts[0], parts[0])
+        year = int(parts[1]) if len(parts) > 1 else 0
+
+        stage = MonthStage(month=month_name, year=year)
+
+        i = 0
+        # Find and read expenses
+        if i < len(rows) and rows[i] and rows[i][0] == expense_headers[0]:
+            i += 1  # skip header
+            while i < len(rows) and rows[i] and rows[i][0] is not None:
+                # Check if this is the income header
+                if len(rows[i]) >= 4 and rows[i][0] == income_headers[0]:
+                    break
+                row = list(rows[i])
+                # Ensure 7 columns
+                while len(row) < 7:
+                    row.append("")
+                stage.new_expenses.append(
+                    [str(v) if v is not None else "" for v in row]
+                )
+                i += 1
+
+        # Skip blank rows
+        while i < len(rows) and (not rows[i] or rows[i][0] is None):
+            i += 1
+
+        # Find and read income (4 columns only: comments, amount, category, date)
+        if i < len(rows) and rows[i] and rows[i][0] == income_headers[0]:
+            i += 1  # skip header
+            while i < len(rows):
+                if not rows[i] or rows[i][0] is None:
+                    break
+                row = list(rows[i])[:4]  # income is 4 columns
+                while len(row) < 4:
+                    row.append("")
+                stage.new_income.append(
+                    [str(v) if v is not None else "" for v in row]
+                )
+                i += 1
+
+        stages[ws_name] = stage
+
+        # Detect changes against metadata
+        expense_meta = meta_by_key.get((ws_name, "expense"), [])
+        for idx, exp_row in enumerate(stage.new_expenses):
+            if idx >= len(expense_meta):
+                break
+            meta = expense_meta[idx]
+            new_cat = exp_row[4]   # category column (index 4)
+            new_sub = exp_row[2]   # subcategory column (index 2)
+            if new_cat != meta.orig_category or new_sub != meta.orig_subcategory:
+                # Determine source from status column (index 6)
+                status = exp_row[6]
+                if status == "BANK":
+                    source = "bank"
+                else:
+                    source = "cc"
+                changes.append(RowChange(
+                    month=month_name,
+                    row_type="expense",
+                    source=source,
+                    lookup_key=exp_row[0],  # column B
+                    old_category=meta.orig_category,
+                    new_category=new_cat,
+                    old_subcategory=meta.orig_subcategory,
+                    new_subcategory=new_sub,
+                ))
+
+        income_meta = meta_by_key.get((ws_name, "income"), [])
+        for idx, inc_row in enumerate(stage.new_income):
+            if idx >= len(income_meta):
+                break
+            meta = income_meta[idx]
+            new_cat = inc_row[2]   # category column (index 2)
+            new_sub = inc_row[0]   # comments/subcategory column (index 0)
+            if new_cat != meta.orig_category or new_sub != meta.orig_subcategory:
+                changes.append(RowChange(
+                    month=month_name,
+                    row_type="income",
+                    source="income",
+                    lookup_key=inc_row[0],  # column D
+                    old_category=meta.orig_category,
+                    new_category=new_cat,
+                    old_subcategory=meta.orig_subcategory,
+                    new_subcategory=new_sub,
+                ))
+
+    return stages, changes

@@ -77,7 +77,7 @@ def deduplicate(new_transactions, existing_rows):
     mask = []
     for _, tx in new_transactions.iterrows():
         date_str = tx["date"].strftime("%Y-%m-%d")
-        biz = str(tx["business_name"]).strip()
+        biz = str(tx.get("business_name", tx.get("action", ""))).strip()
         amount = f"{float(tx['amount']):.2f}"
         key = (date_str, biz, amount)
         mask.append(key not in existing_keys)

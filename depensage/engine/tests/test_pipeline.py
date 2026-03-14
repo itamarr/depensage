@@ -335,7 +335,6 @@ class TestPipelineBankTransactions(unittest.TestCase):
             classified = df.copy()
             classified["category"] = "חשבונות"
             classified["subcategory"] = ""
-            classified["business_name"] = classified["action"]
             return ClassificationResult(
                 classified=classified, unclassified=pd.DataFrame()
             )

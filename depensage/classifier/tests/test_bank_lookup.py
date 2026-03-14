@@ -67,7 +67,7 @@ class TestBankLookupClassifier(unittest.TestCase):
         result = self.classifier.classify_one("פועלים-משכנתא")
         self.assertIsNotNone(result)
         self.assertEqual(result.category, "משכנתא")
-        self.assertEqual(result.business_name, "פועלים משכנתא")
+        self.assertEqual(result.subcategory, "")
 
     def test_prefix_match(self):
         result = self.classifier.classify_one("ני\"ע-קניה-נט")

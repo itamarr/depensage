@@ -63,7 +63,6 @@ DEFAULT_BANK_LOOKUP_PATH = os.path.join(
 class BankClassification:
     category: str
     subcategory: str
-    business_name: str  # What to write in column B (for expenses)
 
 
 @dataclass
@@ -108,7 +107,6 @@ class BankLookupClassifier:
             self.exact[entry["action"]] = BankClassification(
                 category=entry["category"],
                 subcategory=entry.get("subcategory", ""),
-                business_name=entry.get("business_name", ""),
             )
 
         for entry in data.get("patterns", []):
@@ -117,7 +115,6 @@ class BankLookupClassifier:
                 BankClassification(
                     category=entry["category"],
                     subcategory=entry.get("subcategory", ""),
-                    business_name=entry.get("business_name", ""),
                 ),
             ))
 
@@ -131,7 +128,6 @@ class BankLookupClassifier:
                 BankClassification(
                     category=entry["category"],
                     subcategory=entry.get("subcategory", ""),
-                    business_name=entry.get("business_name", ""),
                 ),
             ))
 
@@ -146,17 +142,17 @@ class BankLookupClassifier:
         data = {
             "exact": [
                 {"action": action, "category": c.category,
-                 "subcategory": c.subcategory, "business_name": c.business_name}
+                 "subcategory": c.subcategory}
                 for action, c in self.exact.items()
             ],
             "patterns": [
                 {"prefix": prefix, "category": c.category,
-                 "subcategory": c.subcategory, "business_name": c.business_name}
+                 "subcategory": c.subcategory}
                 for prefix, c in self.patterns
             ],
             "details_matches": [
                 {**match_fields, "category": c.category,
-                 "subcategory": c.subcategory, "business_name": c.business_name}
+                 "subcategory": c.subcategory}
                 for match_fields, c in self.details_matches
             ],
         }
@@ -165,27 +161,24 @@ class BankLookupClassifier:
             json.dump(data, f, ensure_ascii=False, indent=2)
         logger.info(f"Saved bank lookup to {self.lookup_path}")
 
-    def add_exact(self, action, category, subcategory, business_name=""):
+    def add_exact(self, action, category, subcategory):
         """Add an exact match entry and save."""
         self.exact[action] = BankClassification(
             category=category, subcategory=subcategory,
-            business_name=business_name,
         )
         self.save()
 
-    def add_pattern(self, prefix, category, subcategory, business_name=""):
+    def add_pattern(self, prefix, category, subcategory):
         """Add a prefix pattern entry and save."""
         self.patterns.append((
             prefix,
             BankClassification(
                 category=category, subcategory=subcategory,
-                business_name=business_name,
             ),
         ))
         self.save()
 
-    def add_details_match(self, match_fields, category, subcategory,
-                          business_name=""):
+    def add_details_match(self, match_fields, category, subcategory):
         """Add a details match entry and save.
 
         Args:
@@ -196,7 +189,6 @@ class BankLookupClassifier:
             match_fields,
             BankClassification(
                 category=category, subcategory=subcategory,
-                business_name=business_name,
             ),
         ))
         self.save()
@@ -255,7 +247,6 @@ class BankLookupClassifier:
 
         categories = []
         subcategories = []
-        business_names = []
         classified_mask = []
 
         for _, row in df.iterrows():
@@ -264,12 +255,10 @@ class BankLookupClassifier:
             if result:
                 categories.append(result.category)
                 subcategories.append(result.subcategory)
-                business_names.append(result.business_name)
                 classified_mask.append(True)
             else:
                 categories.append("")
                 subcategories.append("")
-                business_names.append("")
                 classified_mask.append(False)
 
         classified_mask = pd.Series(classified_mask, index=df.index)
@@ -281,9 +270,6 @@ class BankLookupClassifier:
             ]
             classified["subcategory"] = [
                 s for s, m in zip(subcategories, classified_mask) if m
-            ]
-            classified["business_name"] = [
-                b for b, m in zip(business_names, classified_mask) if m
             ]
 
         unclassified = df[~classified_mask].copy()

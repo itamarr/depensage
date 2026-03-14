@@ -94,7 +94,7 @@ def prompt_prefix_group(group, categories):
 def prompt_bank_expense(action, amount, date, details, categories, allow_back=False):
     """Prompt user to classify a bank expense.
 
-    Returns (category, subcategory, business_name), None, 'quit', or 'back'.
+    Returns (category, subcategory), None, 'quit', or 'back'.
     """
     cat_list = list(categories.keys())
 
@@ -127,9 +127,8 @@ def prompt_bank_expense(action, amount, date, details, categories, allow_back=Fa
 
     category = cat_list[idx]
     subcategory = _prompt_subcategory(categories[category])
-    business_name = input(f"\n  Display name [{action}]: ").strip() or action
 
-    return (category, subcategory, business_name)
+    return (category, subcategory)
 
 
 def prompt_income(action, amount, date, details, allow_back=False):
@@ -325,11 +324,8 @@ def cmd_review_bank(args):
             if choice is None:
                 continue
             category, subcategory = choice
-            business_name = input(
-                f"  Display name [{group['prefix']}]: "
-            ).strip() or group["prefix"]
             classifier.add_pattern(
-                group["prefix"], category, subcategory, business_name
+                group["prefix"], category, subcategory
             )
             grouped_actions.update(group["merchants"])
             print(f"  → Saved pattern: {group['prefix']}* → {category}" +
@@ -369,7 +365,7 @@ def cmd_review_bank(args):
         if choice == "quit":
             break
         if choice == "back":
-            prev_action, _, _, _ = history.pop()
+            prev_action, _, _ = history.pop()
             classifier.remove_exact(prev_action)
             print(f"  ← Undid: {prev_action}")
             i -= 1
@@ -378,12 +374,11 @@ def cmd_review_bank(args):
             i += 1
             continue
 
-        category, subcategory, business_name = choice
-        classifier.add_exact(action, category, subcategory, business_name)
-        history.append((action, category, subcategory, business_name))
+        category, subcategory = choice
+        classifier.add_exact(action, category, subcategory)
+        history.append((action, category, subcategory))
         print(f"  → Saved: {action} → {category}" +
-              (f" / {subcategory}" if subcategory else "") +
-              (f" ({business_name})" if business_name != action else ""))
+              (f" / {subcategory}" if subcategory else ""))
         i += 1
 
     reviewed = len(grouped_actions) + len(history)
