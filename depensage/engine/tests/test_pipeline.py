@@ -97,12 +97,20 @@ class TestPipeline(unittest.TestCase):
             ["02/05/2024", "Shop B", 50.75],
         ])
         self._setup_classifier_all_classified()
-        result = run_pipeline([path], self.handler, self.classifier)
+        staged = run_pipeline([path], self.handler, self.classifier)
 
-        self.assertEqual(result.total_parsed, 2)
-        self.assertEqual(result.in_process_skipped, 0)
-        self.assertEqual(result.classified, 2)
-        self.assertEqual(result.unclassified, 0)
+        self.assertEqual(staged.total_parsed, 2)
+        self.assertEqual(staged.in_process_skipped, 0)
+        self.assertEqual(staged.classified, 2)
+        self.assertEqual(staged.unclassified, 0)
+
+        # Check staged data
+        stages = staged.sorted_stages()
+        self.assertEqual(len(stages), 1)
+        self.assertEqual(len(stages[0].new_expenses), 2)
+
+        # Commit and check
+        result = staged.commit(self.handler)
         self.assertEqual(len(result.months), 1)
         self.assertEqual(result.months[0].written, 2)
         self.assertEqual(result.months[0].duplicates, 0)
@@ -117,9 +125,9 @@ class TestPipeline(unittest.TestCase):
             headers=["תאריך", "שם בית עסק", "סכום", "כרטיס", "מועד חיוב"],
         )
         self._setup_classifier_all_classified()
-        result = run_pipeline([path], self.handler, self.classifier)
-        self.assertEqual(result.in_process_skipped, 2)
-        self.assertEqual(result.classified, 0)
+        staged = run_pipeline([path], self.handler, self.classifier)
+        self.assertEqual(staged.in_process_skipped, 2)
+        self.assertEqual(staged.classified, 0)
 
     def test_all_duplicates(self):
         path = self._excel([
@@ -129,7 +137,8 @@ class TestPipeline(unittest.TestCase):
         self.handler.read_expense_rows.return_value = [
             ["Shop A", "", "", "100.50", "סופר", "02/01/2024"],
         ]
-        result = run_pipeline([path], self.handler, self.classifier)
+        staged = run_pipeline([path], self.handler, self.classifier)
+        result = staged.commit(self.handler)
         self.assertEqual(result.months[0].written, 0)
         self.assertEqual(result.months[0].duplicates, 1)
         self.handler.write_expense_rows.assert_not_called()
@@ -139,10 +148,16 @@ class TestPipeline(unittest.TestCase):
             ["02/01/2024", "Unknown Shop", 42.00],
         ])
         self._setup_classifier_none_classified()
-        result = run_pipeline([path], self.handler, self.classifier)
-        self.assertEqual(result.unclassified, 1)
+        staged = run_pipeline([path], self.handler, self.classifier)
+        self.assertEqual(staged.unclassified, 1)
+        self.assertIn("Unknown Shop", staged.unclassified_merchants)
+
+        # Check staged rows have empty category
+        stages = staged.sorted_stages()
+        self.assertEqual(stages[0].new_expenses[0][4], "")  # empty category
+
+        result = staged.commit(self.handler)
         self.assertEqual(result.months[0].written, 1)
-        self.assertIn("Unknown Shop", result.unclassified_merchants)
 
         written_rows = self.handler.write_expense_rows.call_args[0][2]
         self.assertEqual(written_rows[0][4], "")  # empty category
@@ -168,15 +183,22 @@ class TestPipeline(unittest.TestCase):
         # first_empty=4 means 1 slot available, need 3, so insert 2
         self.handler.find_section_marker.return_value = 6
         self.handler.find_first_empty_expense_row.return_value = 4
-        result = run_pipeline([path], self.handler, self.classifier)
-        # insert before total row (marker-1=5)
+        staged = run_pipeline([path], self.handler, self.classifier)
+
+        # Check staged insert count
+        stages = staged.sorted_stages()
+        self.assertEqual(stages[0].expense_insert_needed, 2)
+        self.assertEqual(len(stages[0].new_expenses), 3)
+
+        # Commit performs the insert
+        result = staged.commit(self.handler)
         self.handler.insert_rows.assert_called_once_with("February", 5, 2)
         self.assertEqual(result.months[0].written, 3)
 
     def test_empty_file(self):
         path = self._excel([], headers=["תאריך", "שם בית עסק", "סכום"])
-        result = run_pipeline([path], self.handler, self.classifier)
-        self.assertEqual(result.total_parsed, 0)
+        staged = run_pipeline([path], self.handler, self.classifier)
+        self.assertEqual(staged.total_parsed, 0)
 
     def test_multi_month(self):
         path = self._excel([
@@ -185,7 +207,8 @@ class TestPipeline(unittest.TestCase):
         ])
         self._setup_classifier_all_classified()
         self.handler.get_or_create_month_sheet.side_effect = lambda d: d.strftime("%B")
-        result = run_pipeline([path], self.handler, self.classifier)
+        staged = run_pipeline([path], self.handler, self.classifier)
+        result = staged.commit(self.handler)
         self.assertEqual(len(result.months), 2)
         month_names = {m.month for m in result.months}
         self.assertEqual(month_names, {"January", "February"})
@@ -194,7 +217,8 @@ class TestPipeline(unittest.TestCase):
         path1 = self._excel([["02/01/2024", "Shop A", 100.50]])
         path2 = self._excel([["02/05/2024", "Shop B", 50.75]])
         self._setup_classifier_all_classified()
-        result = run_pipeline([path1, path2], self.handler, self.classifier)
+        staged = run_pipeline([path1, path2], self.handler, self.classifier)
+        result = staged.commit(self.handler)
         self.assertEqual(result.total_parsed, 2)
         self.assertEqual(result.months[0].written, 2)
 
@@ -206,7 +230,8 @@ class TestPipeline(unittest.TestCase):
         ])
         self._setup_classifier_all_classified()
         self.handler.get_or_create_month_sheet.side_effect = lambda d: d.strftime("%B")
-        result = run_pipeline([path], self.handler, self.classifier, year=2026)
+        staged = run_pipeline([path], self.handler, self.classifier, year=2026)
+        result = staged.commit(self.handler)
         self.assertEqual(result.total_parsed, 2)
         self.assertEqual(len(result.months), 1)
         self.assertEqual(result.months[0].month, "January")
@@ -219,9 +244,10 @@ class TestPipeline(unittest.TestCase):
             ["12/15/2025", "Shop A", 100.50],
         ])
         self._setup_classifier_all_classified()
-        result = run_pipeline([path], self.handler, self.classifier, year=2026)
-        self.assertEqual(result.total_parsed, 1)
-        self.assertEqual(result.classified, 0)
+        staged = run_pipeline([path], self.handler, self.classifier, year=2026)
+        self.assertEqual(staged.total_parsed, 1)
+        self.assertEqual(staged.classified, 0)
+        result = staged.commit(self.handler)
         self.assertEqual(len(result.months), 0)
 
     def test_handler_dict(self):
@@ -247,7 +273,8 @@ class TestPipeline(unittest.TestCase):
         handler_2026.write_expense_rows.return_value = True
 
         handlers = {2025: handler_2025, 2026: handler_2026}
-        result = run_pipeline([path], handlers, self.classifier)
+        staged = run_pipeline([path], handlers, self.classifier)
+        result = staged.commit(handlers)
 
         handler_2025.write_expense_rows.assert_called_once()
         handler_2026.write_expense_rows.assert_called_once()
@@ -337,16 +364,21 @@ class TestPipelineBankTransactions(unittest.TestCase):
             lambda sheet, section: 131 if section == "budget" else 160
         )
 
-        result = run_pipeline(
+        staged = run_pipeline(
             [path], self.handler, self.classifier, year=2026,
             bank_classifier=self.bank_classifier,
             income_classifier=self.income_classifier,
         )
 
-        self.assertEqual(result.total_parsed, 1)
+        self.assertEqual(staged.total_parsed, 1)
+        stages = staged.sorted_stages()
+        self.assertEqual(len(stages[0].new_expenses), 1)
+        # Check BANK status in staged rows
+        self.assertEqual(stages[0].new_expenses[0][6], "BANK")
+
+        result = staged.commit(self.handler)
         self.assertEqual(len(result.months), 1)
         self.assertEqual(result.months[0].written, 1)
-        # Check BANK status in written rows
         written_rows = self.handler.write_expense_rows.call_args[0][2]
         self.assertEqual(written_rows[0][6], "BANK")  # col H
 
@@ -363,13 +395,14 @@ class TestPipelineBankTransactions(unittest.TestCase):
             lambda sheet, section: 131 if section == "budget" else 160
         )
 
-        result = run_pipeline(
+        staged = run_pipeline(
             [path], self.handler, self.classifier, year=2026,
             bank_classifier=self.bank_classifier,
             income_classifier=self.income_classifier,
         )
 
-        self.assertEqual(result.total_parsed, 1)
+        self.assertEqual(staged.total_parsed, 1)
+        result = staged.commit(self.handler)
         self.assertEqual(len(result.months), 1)
         self.assertEqual(result.months[0].income_written, 1)
         self.handler.write_income_rows.assert_called_once()
@@ -388,16 +421,17 @@ class TestPipelineBankTransactions(unittest.TestCase):
             lambda sheet, section: 131 if section == "budget" else 160
         )
 
-        result = run_pipeline(
+        staged = run_pipeline(
             [path], self.handler, self.classifier, year=2026,
             bank_classifier=self.bank_classifier,
             income_classifier=self.income_classifier,
         )
 
-        lump_amounts = [ls.amount for ls in result.cc_lump_sums]
+        lump_amounts = [ls.amount for ls in staged.cc_lump_sums]
         self.assertIn(5000.0, lump_amounts)
-        # Only the expense should be written, not the CC lump sum
-        self.assertEqual(result.months[0].written, 1)
+        # Only the expense should be staged, not the CC lump sum
+        stages = staged.sorted_stages()
+        self.assertEqual(len(stages[0].new_expenses), 1)
 
     def test_mixed_cc_and_bank(self):
         """Pipeline handles both CC and bank files together."""
@@ -428,14 +462,15 @@ class TestPipelineBankTransactions(unittest.TestCase):
             lambda sheet, section: 131 if section == "budget" else 160
         )
 
-        result = run_pipeline(
+        staged = run_pipeline(
             [cc_path, bank_path], self.handler, self.classifier, year=2026,
             bank_classifier=self.bank_classifier,
             income_classifier=self.income_classifier,
         )
 
-        self.assertEqual(result.total_parsed, 2)
-        self.assertEqual(result.classified, 2)
+        self.assertEqual(staged.total_parsed, 2)
+        self.assertEqual(staged.classified, 2)
+        result = staged.commit(self.handler)
         self.assertEqual(result.months[0].written, 2)
 
     def test_bank_income_dedup(self):
@@ -455,12 +490,13 @@ class TestPipelineBankTransactions(unittest.TestCase):
             ["מלאנוקס טכנולו", "25000.00", "משכורת", "01/01/2026"],
         ]
 
-        result = run_pipeline(
+        staged = run_pipeline(
             [path], self.handler, self.classifier, year=2026,
             bank_classifier=self.bank_classifier,
             income_classifier=self.income_classifier,
         )
 
+        result = staged.commit(self.handler)
         self.assertEqual(result.months[0].income_written, 0)
         self.assertEqual(result.months[0].income_duplicates, 1)
         self.handler.write_income_rows.assert_not_called()
@@ -475,13 +511,14 @@ class TestPipelineBankTransactions(unittest.TestCase):
             lambda sheet, section: 131 if section == "budget" else 160
         )
 
-        result = run_pipeline(
+        staged = run_pipeline(
             [path], self.handler, self.classifier, year=2026,
         )
 
-        self.assertEqual(result.total_parsed, 1)
-        self.assertEqual(result.unclassified, 1)
-        # Should still write with empty category
+        self.assertEqual(staged.total_parsed, 1)
+        self.assertEqual(staged.unclassified, 1)
+        # Should still stage with empty category
+        result = staged.commit(self.handler)
         self.assertEqual(result.months[0].written, 1)
 
 

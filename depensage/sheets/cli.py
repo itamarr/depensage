@@ -72,6 +72,10 @@ def main():
         "statements", nargs="+",
         help="Path(s) to CC statement and/or bank transcript file(s)",
     )
+    process_parser.add_argument(
+        "-y", "--auto-confirm", action="store_true",
+        help="Skip confirmation prompt and write immediately",
+    )
 
     carryover_parser = subparsers.add_parser(
         "carryover", help="Run month-to-month carryover"

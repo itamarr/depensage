@@ -125,19 +125,37 @@ def cmd_process(args):
             print(f"File not found: {p}", file=sys.stderr)
             sys.exit(1)
 
-    result = run_pipeline(
+    staged = run_pipeline(
         paths, handlers, classifier, year=year,
         bank_classifier=bank_classifier,
         income_classifier=income_classifier,
     )
 
-    print(f"\nPipeline complete:")
-    print(f"  Parsed:     {result.total_parsed}")
-    print(f"  In-process: {result.in_process_skipped} (skipped)")
-    print(f"  Classified: {result.classified}")
-    print(f"  Unknown:    {result.unclassified}")
-    print()
+    print(f"\nPipeline staged:")
+    print(staged.summary())
 
+    if not staged.has_writes():
+        print("\nNothing to write (all duplicates or empty).")
+        return
+
+    # Export XLSX for review
+    xlsx_path = staged.export_xlsx()
+    print(f"\nReview staged changes: {xlsx_path}")
+
+    auto_confirm = getattr(args, "auto_confirm", False)
+    if auto_confirm:
+        result = staged.commit(handlers)
+    else:
+        try:
+            confirm = input("\nWrite to spreadsheet? [y/N] ")
+        except EOFError:
+            confirm = "n"
+        if confirm.strip().lower() != "y":
+            print("Aborted.")
+            return
+        result = staged.commit(handlers)
+
+    print(f"\nCommitted:")
     for mr in result.months:
         parts = [f"{mr.written} written, {mr.duplicates} duplicates"]
         if mr.income_written or mr.income_duplicates:
@@ -145,19 +163,6 @@ def cmd_process(args):
                 f"{mr.income_written} income, {mr.income_duplicates} income dupes"
             )
         print(f"  {mr.month} {mr.year}: {', '.join(parts)}")
-
-    if result.unclassified_merchants:
-        print(f"\n  Unclassified merchants ({len(result.unclassified_merchants)}):")
-        for name in result.unclassified_merchants:
-            print(f"    - {name}")
-
-    if result.cc_lump_sums:
-        total = sum(ls.amount for ls in result.cc_lump_sums)
-        print(f"\n  CC lump sums from bank ({len(result.cc_lump_sums)}): "
-              f"{total:,.2f}")
-        for ls in result.cc_lump_sums:
-            date_str = ls.date.strftime("%Y-%m-%d") if hasattr(ls.date, "strftime") else str(ls.date)
-            print(f"    - {ls.amount:,.2f} ({date_str})")
 
 
 def cmd_verify(args):

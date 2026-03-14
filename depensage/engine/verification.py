@@ -5,6 +5,9 @@ CC-tagged expenses in the spreadsheet.
 Each CC lump sum (debited around the 10th of the month) covers one
 billing cycle: previous month's pending expenses (date > billing_day)
 plus current month's charged expenses (date <= billing_day).
+
+Supports per-card matching: tries individual lump sums first (single-card),
+then the sum of all lump sums (both-cards).
 """
 
 import logging
@@ -24,7 +27,7 @@ _MONTH_NAMES = [
 
 
 def _month_index(sheet_name):
-    """Return 1-based month index for a Hebrew month sheet name."""
+    """Return 1-based month index for a month sheet name."""
     for i, name in enumerate(_MONTH_NAMES, 1):
         if name == sheet_name:
             return i
@@ -32,7 +35,7 @@ def _month_index(sheet_name):
 
 
 def _prev_month_name(sheet_name):
-    """Return the previous month's Hebrew sheet name."""
+    """Return the previous month's sheet name."""
     idx = _month_index(sheet_name)
     if idx is None:
         return None
@@ -43,15 +46,18 @@ def _prev_month_name(sheet_name):
 @dataclass
 class BillingCycleVerification:
     """Verification result for a single billing cycle (one month's charges)."""
-    billing_month: str  # Hebrew month name where lump sums were debited
+    billing_month: str  # month name where lump sums were debited
     billing_year: int
     lump_sums: list[CCLumpSum]  # The CC lump sums debited this month
     lump_total: float
     charged_total: float  # Sum of CC-status expenses in billing month (date <= 10)
     pending_total: float  # Sum of pending expenses in prev month (date > 10)
     expected_total: float  # charged + pending
-    difference: float  # lump_total - expected_total
+    difference: float  # matched amount - expected_total
     matched: bool  # Whether the totals match (within tolerance)
+    match_type: str = ""  # "single-card", "both-cards", or ""
+    matched_lump: CCLumpSum | None = None  # The matched lump sum (single-card)
+    unmatched_lumps: list[CCLumpSum] = field(default_factory=list)
 
 
 @dataclass
@@ -122,7 +128,10 @@ def verify_cc_charges(handler, cc_lump_sums, year,
     For each month where CC lump sums were debited, compares:
       - Current month's "CC" (charged) expenses
       - Previous month's "" (pending) expenses
-    against the total lump sum amount.
+    against the lump sum amounts.
+
+    Tries per-card matching first (individual lump sum), then
+    both-cards matching (sum of all lump sums).
 
     Args:
         handler: SheetHandler for the year being verified.
@@ -174,7 +183,29 @@ def verify_cc_charges(handler, cc_lump_sums, year,
                 pending_total = sum(amt for _, amt in prev_pending)
 
         expected_total = charged_total + pending_total
+
+        # Try per-card matching: check each individual lump sum
+        matched = False
+        match_type = ""
+        matched_lump = None
+        unmatched_lumps = []
         difference = lump_total - expected_total
+
+        for ls in lump_list:
+            if abs(ls.amount - expected_total) <= tolerance:
+                matched = True
+                match_type = "single-card"
+                matched_lump = ls
+                difference = ls.amount - expected_total
+                unmatched_lumps = [x for x in lump_list if x is not ls]
+                break
+
+        # If no single-card match, try sum of all lump sums (both-cards)
+        if not matched and len(lump_list) > 1:
+            if abs(lump_total - expected_total) <= tolerance:
+                matched = True
+                match_type = "both-cards"
+                difference = lump_total - expected_total
 
         cycle = BillingCycleVerification(
             billing_month=billing_month_name,
@@ -185,7 +216,10 @@ def verify_cc_charges(handler, cc_lump_sums, year,
             pending_total=pending_total,
             expected_total=expected_total,
             difference=difference,
-            matched=abs(difference) <= tolerance,
+            matched=matched,
+            match_type=match_type,
+            matched_lump=matched_lump,
+            unmatched_lumps=unmatched_lumps,
         )
         result.cycles.append(cycle)
         if not cycle.matched:
@@ -201,16 +235,31 @@ def format_verification_report(result):
 
     lines = []
     for cycle in result.cycles:
-        status = "OK" if cycle.matched else "MISMATCH"
+        if cycle.matched:
+            status = f"OK - {cycle.match_type}" if cycle.match_type else "OK"
+        else:
+            status = "MISMATCH"
         lines.append(
             f"  {cycle.billing_month} {cycle.billing_year}: [{status}]"
         )
+
+        if cycle.match_type == "single-card" and cycle.matched_lump:
+            ls = cycle.matched_lump
+            date_str = (
+                ls.date.strftime("%Y-%m-%d")
+                if hasattr(ls.date, "strftime") else str(ls.date)
+            )
+            lines.append(
+                f"    Matched lump sum: {ls.amount:,.2f} ({date_str})"
+            )
+        else:
+            lines.append(
+                f"    Bank lump sums ({len(cycle.lump_sums)}): "
+                f"{cycle.lump_total:,.2f}"
+            )
+
         lines.append(
-            f"    Bank lump sums ({len(cycle.lump_sums)}): "
-            f"{cycle.lump_total:,.2f}"
-        )
-        lines.append(
-            f"    Charged (CC):  {cycle.charged_total:,.2f}"
+            f"    Charged (CC):   {cycle.charged_total:,.2f}"
         )
         lines.append(
             f"    Pending (prev): {cycle.pending_total:,.2f}"
@@ -218,6 +267,17 @@ def format_verification_report(result):
         lines.append(
             f"    Expected total: {cycle.expected_total:,.2f}"
         )
+
+        if cycle.match_type == "single-card" and cycle.unmatched_lumps:
+            for ls in cycle.unmatched_lumps:
+                date_str = (
+                    ls.date.strftime("%Y-%m-%d")
+                    if hasattr(ls.date, "strftime") else str(ls.date)
+                )
+                lines.append(
+                    f"    Unmatched lump:  {ls.amount:,.2f} ({date_str})"
+                )
+
         if not cycle.matched:
             lines.append(
                 f"    Difference:     {cycle.difference:+,.2f}"

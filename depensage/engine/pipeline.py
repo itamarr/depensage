@@ -2,8 +2,9 @@
 Core automated expense pipeline.
 
 Parses CC and bank statements, filters in-process transactions, classifies,
-deduplicates against existing sheet data, and writes to the correct
-monthly Google Sheets.
+deduplicates against existing sheet data, and stages writes for the correct
+monthly Google Sheets. Returns a StagedPipelineResult that the caller can
+inspect, export, and commit.
 """
 
 import logging
@@ -20,6 +21,7 @@ from depensage.engine.formatter import (
     format_for_sheet, format_bank_expenses_for_sheet, format_income_for_sheet,
 )
 from depensage.engine.carryover import run_carryover, get_previous_month
+from depensage.engine.staging import StagedPipelineResult
 from depensage.sheets.spreadsheet_handler import SheetHandler, SECTION_MARKERS
 from depensage.sheets.sheet_utils import SheetUtils
 
@@ -51,6 +53,9 @@ def run_pipeline(statement_paths, handlers, classifier, year=None,
                  bank_classifier=None, income_classifier=None):
     """Run the full expense and income processing pipeline.
 
+    Returns a StagedPipelineResult with all writes staged (not yet committed).
+    The caller should call .commit(handlers) to execute the writes.
+
     Args:
         statement_paths: List of file paths (CC statements and/or bank transcripts).
         handlers: Dict mapping year (int) to authenticated SheetHandler,
@@ -62,7 +67,7 @@ def run_pipeline(statement_paths, handlers, classifier, year=None,
         income_classifier: IncomeLookupClassifier instance (for bank income).
 
     Returns:
-        PipelineResult with processing statistics.
+        StagedPipelineResult with processing statistics and staged writes.
 
     Raises:
         ValueError: If marker not found or no handler for a year.
@@ -122,15 +127,29 @@ def run_pipeline(statement_paths, handlers, classifier, year=None,
 
     total_parsed = cc_result.total_parsed + bank_exp_result.total + bank_inc_result.total
 
-    # 5. Merge all expenses and write by month
+    # Build staged result
+    staged = StagedPipelineResult(
+        total_parsed=total_parsed,
+        in_process_skipped=cc_result.in_process_skipped,
+        classified=(
+            cc_result.classified + bank_exp_result.classified
+            + bank_inc_result.classified
+        ),
+        unclassified=(
+            cc_result.unclassified + bank_exp_result.unclassified
+            + bank_inc_result.unclassified
+        ),
+        unclassified_merchants=cc_result.unclassified_merchants,
+        cc_lump_sums=all_cc_lump_sums,
+    )
+
+    # 5. Merge all expenses and stage by month
     all_expenses = []
     if cc_result.cc_expenses is not None and not cc_result.cc_expenses.empty:
         all_expenses.append(("cc", cc_result.cc_expenses))
     if bank_exp_result.expenses is not None and not bank_exp_result.expenses.empty:
         all_expenses.append(("bank", bank_exp_result.expenses))
 
-    # Track month results
-    month_results_map = {}
     sheets_seen = set()
 
     def _try_carryover(sheet_name, tx_year):
@@ -175,7 +194,7 @@ def run_pipeline(statement_paths, handlers, classifier, year=None,
             _try_carryover(sheet_name, tx_year)
         return sheet_name
 
-    # Write expenses (CC + bank)
+    # Stage expenses (CC + bank)
     for source, expenses_df in all_expenses:
         expenses_df = expenses_df.copy()
         expenses_df["_year_month"] = expenses_df["date"].dt.to_period("M")
@@ -202,12 +221,8 @@ def run_pipeline(statement_paths, handlers, classifier, year=None,
             new_txns = deduplicate(month_txns, existing_rows)
             dup_count = len(month_txns) - len(new_txns)
 
-            key = (sheet_name, tx_year)
-            if key not in month_results_map:
-                month_results_map[key] = MonthResult(
-                    month=sheet_name, year=tx_year, written=0, duplicates=0
-                )
-            month_results_map[key].duplicates += dup_count
+            stage = staged.get_or_create_stage(sheet_name, tx_year)
+            stage.duplicates += dup_count
 
             if new_txns.empty:
                 continue
@@ -222,14 +237,13 @@ def run_pipeline(statement_paths, handlers, classifier, year=None,
             last_data_row = marker_row - 2
             available = last_data_row - first_empty + 1
 
-            if available < rows_needed:
-                insert_count = rows_needed - available
-                handler.insert_rows(sheet_name, marker_row - 1, insert_count)
+            insert_needed = max(0, rows_needed - available)
 
-            handler.write_expense_rows(sheet_name, first_empty, formatted)
-            month_results_map[key].written += len(formatted)
+            stage.new_expenses.extend(formatted)
+            stage.expense_start_row = first_empty
+            stage.expense_insert_needed += insert_needed
 
-    # Write income
+    # Stage income
     if bank_inc_result.income is not None and not bank_inc_result.income.empty:
         income_df = bank_inc_result.income.copy()
         income_df["_year_month"] = income_df["date"].dt.to_period("M")
@@ -250,12 +264,8 @@ def run_pipeline(statement_paths, handlers, classifier, year=None,
             new_income = deduplicate_income(month_income, existing_income)
             inc_dup_count = len(month_income) - len(new_income)
 
-            key = (sheet_name, tx_year)
-            if key not in month_results_map:
-                month_results_map[key] = MonthResult(
-                    month=sheet_name, year=tx_year, written=0, duplicates=0
-                )
-            month_results_map[key].income_duplicates += inc_dup_count
+            stage = staged.get_or_create_stage(sheet_name, tx_year)
+            stage.income_duplicates += inc_dup_count
 
             if new_income.empty:
                 continue
@@ -275,32 +285,15 @@ def run_pipeline(statement_paths, handlers, classifier, year=None,
                 logger.error(f"No savings marker in {sheet_name}")
                 continue
 
-            # Income total row is at savings_marker - 2, data ends before it
             last_income_data = savings_marker - 3
             available = last_income_data - first_empty + 1
+            insert_needed = max(0, len(formatted) - available)
 
-            if available < len(formatted):
-                insert_count = len(formatted) - available
-                # Insert before the total row (savings_marker - 2)
-                handler.insert_rows(sheet_name, savings_marker - 2, insert_count)
+            stage.new_income.extend(formatted)
+            stage.income_start_row = first_empty
+            stage.income_insert_needed += insert_needed
 
-            handler.write_income_rows(sheet_name, first_empty, formatted)
-            month_results_map[key].income_written += len(formatted)
-
-    month_results = sorted(
-        month_results_map.values(),
-        key=lambda m: (m.year, _month_order(m.month))
-    )
-
-    return PipelineResult(
-        total_parsed=total_parsed,
-        in_process_skipped=cc_result.in_process_skipped,
-        classified=cc_result.classified + bank_exp_result.classified + bank_inc_result.classified,
-        unclassified=cc_result.unclassified + bank_exp_result.unclassified + bank_inc_result.unclassified,
-        months=month_results,
-        unclassified_merchants=cc_result.unclassified_merchants,
-        cc_lump_sums=all_cc_lump_sums,
-    )
+    return staged
 
 
 def _month_order(month_name):

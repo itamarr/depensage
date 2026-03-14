@@ -25,54 +25,13 @@ PREV_MONTH = {
 }
 
 
-def _read_section_range(handler, sheet_name, section, columns, end_section=None):
-    """Read a range from a section, using markers for boundaries.
-
-    Args:
-        handler: SheetHandler instance.
-        sheet_name: Name of the sheet.
-        section: Section name (e.g. "budget").
-        columns: Column range string (e.g. "B:H").
-        end_section: Next section name for end boundary. If None,
-                     reads 30 rows from marker.
-
-    Returns:
-        Tuple of (start_row, list of rows) where start_row is 1-based.
-        Returns (None, []) if marker not found.
-    """
-    start_row = handler.find_section_marker(sheet_name, section)
-    if start_row is None:
-        return None, []
-
-    if end_section:
-        end_row = handler.find_section_marker(sheet_name, end_section)
-        if end_row is None:
-            end_row = start_row + 30
-    else:
-        end_row = start_row + 30
-
-    col_start, col_end = columns.split(":")
-    range_str = f"{col_start}{start_row}:{col_end}{end_row - 1}"
-
-    try:
-        result = handler.sheets_service.values().get(
-            spreadsheetId=handler.spreadsheet_id,
-            range=f"{sheet_name}!{range_str}",
-            valueRenderOption="UNFORMATTED_VALUE",
-        ).execute()
-        return start_row, result.get("values", [])
-    except Exception as e:
-        logger.error(f"Failed to read {section} section from {sheet_name}: {e}")
-        return start_row, []
-
-
 def _read_budget_carry_values(handler, sheet_name):
     """Read budget remaining (B) for CARRY-flagged lines.
 
     Returns list of dicts: {category, subcategory, remaining}.
     """
-    start_row, rows = _read_section_range(
-        handler, sheet_name, "budget", "B:H", end_section="income"
+    start_row, rows = handler.read_section_range(
+        sheet_name, "budget", "B:H", end_section="income"
     )
     if not rows:
         return []
@@ -113,8 +72,8 @@ def _read_savings_totals(handler, sheet_name):
 
     Returns list of dicts: {goal, total}.
     """
-    start_row, rows = _read_section_range(
-        handler, sheet_name, "savings", "A:G", end_section="reconciliation"
+    start_row, rows = handler.read_section_range(
+        sheet_name, "savings", "A:G", end_section="reconciliation"
     )
     if not rows:
         return []
@@ -154,8 +113,8 @@ def _read_income_total(handler, sheet_name):
 
     Returns float or None.
     """
-    start_row, rows = _read_section_range(
-        handler, sheet_name, "income", "B:G", end_section="savings"
+    start_row, rows = handler.read_section_range(
+        sheet_name, "income", "B:G", end_section="savings"
     )
     if not rows:
         return None
@@ -180,8 +139,8 @@ def _write_budget_accumulated(handler, sheet_name, carry_values):
 
     Matches by (category, subcategory) in columns G and F.
     """
-    start_row, rows = _read_section_range(
-        handler, sheet_name, "budget", "B:H", end_section="income"
+    start_row, rows = handler.read_section_range(
+        sheet_name, "budget", "B:H", end_section="income"
     )
     if not rows:
         logger.error(f"Could not read budget section in {sheet_name}")
@@ -208,18 +167,8 @@ def _write_budget_accumulated(handler, sheet_name, carry_values):
         if key in carry_lookup:
             actual_row = start_row + i
             value = carry_lookup[key]
-            try:
-                handler.sheets_service.values().update(
-                    spreadsheetId=handler.spreadsheet_id,
-                    range=f"{sheet_name}!E{actual_row}",
-                    valueInputOption="USER_ENTERED",
-                    body={"values": [[value]]},
-                ).execute()
+            if handler.update_cell(sheet_name, f"E{actual_row}", value):
                 written += 1
-            except Exception as e:
-                logger.error(
-                    f"Failed to write accumulated for {category}/{subcategory}: {e}"
-                )
 
     return written
 
@@ -229,8 +178,8 @@ def _write_savings_accumulated(handler, sheet_name, savings_totals):
 
     Matches by goal name in column G.
     """
-    start_row, rows = _read_section_range(
-        handler, sheet_name, "savings", "A:G", end_section="reconciliation"
+    start_row, rows = handler.read_section_range(
+        sheet_name, "savings", "A:G", end_section="reconciliation"
     )
     if not rows:
         logger.error(f"Could not read savings section in {sheet_name}")
@@ -248,16 +197,8 @@ def _write_savings_accumulated(handler, sheet_name, savings_totals):
 
         actual_row = start_row + i
         value = totals_lookup[goal]
-        try:
-            handler.sheets_service.values().update(
-                spreadsheetId=handler.spreadsheet_id,
-                range=f"{sheet_name}!F{actual_row}",
-                valueInputOption="USER_ENTERED",
-                body={"values": [[value]]},
-            ).execute()
+        if handler.update_cell(sheet_name, f"F{actual_row}", value):
             written += 1
-        except Exception as e:
-            logger.error(f"Failed to write savings accumulated for {goal}: {e}")
 
     return written
 
@@ -274,8 +215,8 @@ def _write_savings_budget_from_income(handler, sheet_name, income_total):
         logger.info("No income total available, skipping savings budget adjustment")
         return False
 
-    start_row, rows = _read_section_range(
-        handler, sheet_name, "budget", "B:H", end_section="income"
+    start_row, rows = handler.read_section_range(
+        sheet_name, "budget", "B:H", end_section="income"
     )
     if not rows:
         logger.error(f"Could not read budget section in {sheet_name}")
@@ -316,17 +257,7 @@ def _write_savings_budget_from_income(handler, sheet_name, income_total):
         f"= {savings_budget:,.2f}"
     )
 
-    try:
-        handler.sheets_service.values().update(
-            spreadsheetId=handler.spreadsheet_id,
-            range=f"{sheet_name}!D{savings_row}",
-            valueInputOption="USER_ENTERED",
-            body={"values": [[savings_budget]]},
-        ).execute()
-        return True
-    except Exception as e:
-        logger.error(f"Failed to write savings budget: {e}")
-        return False
+    return handler.update_cell(sheet_name, f"D{savings_row}", savings_budget)
 
 
 def run_carryover(source_handler, source_month, dest_handler, dest_month):
