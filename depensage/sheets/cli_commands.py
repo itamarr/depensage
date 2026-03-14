@@ -9,7 +9,7 @@ from collections import Counter
 
 from depensage.classifier.cc_lookup import Classification, LookupClassifier, DEFAULT_LOOKUP_PATH
 from depensage.sheets.cli_helpers import (
-    get_handler, get_handlers_for_pipeline, MONTH_SHEETS,
+    get_handler, get_handlers_for_pipeline, fetch_categories, MONTH_SHEETS,
 )
 
 
@@ -107,6 +107,225 @@ def cmd_build_lookup(args):
     print(f"Built lookup table with {len(exact)} merchants → {os.path.abspath(output_path)}")
 
 
+def _get_categories_with_subcats(handlers):
+    """Fetch set of category names that have subcategories."""
+    try:
+        if isinstance(handlers, dict):
+            any_handler = next(iter(handlers.values()))
+        else:
+            any_handler = handlers
+        cats = fetch_categories(any_handler)
+        return {cat for cat, subcats in cats.items() if subcats}
+    except Exception:
+        return set()
+
+
+def _import_and_derive_coordinates(xlsx_path, handlers):
+    """Import a staged XLSX and re-derive write coordinates from the live sheet.
+
+    Returns (staged_result, changes) or None on failure.
+    """
+    from depensage.engine.staging import import_staged_xlsx, StagedPipelineResult
+
+    print(f"Reading staged XLSX: {xlsx_path}")
+    stages, changes = import_staged_xlsx(xlsx_path)
+
+    if not stages:
+        print("No data found in XLSX.")
+        return None, None
+
+    if not isinstance(handlers, dict):
+        single = handlers
+        get_h = lambda y: single
+    else:
+        get_h = lambda y: handlers[y]
+
+    for ws_name, stage in stages.items():
+        handler = get_h(stage.year)
+
+        if stage.new_expenses:
+            first_empty = handler.find_first_empty_expense_row(stage.month)
+            marker_row = handler.find_section_marker(stage.month, "budget")
+            if marker_row is None:
+                print(f"Warning: No budget marker in {stage.month}, skipping expenses")
+                stage.new_expenses = []
+                continue
+            rows_needed = len(stage.new_expenses)
+            last_data_row = marker_row - 2
+            available = last_data_row - first_empty + 1
+            insert_needed = max(0, rows_needed - available)
+            stage.expense_start_row = first_empty
+            stage.expense_insert_needed = insert_needed
+
+        if stage.new_income:
+            first_empty = handler.find_first_empty_income_row(stage.month)
+            if first_empty is None:
+                print(f"Warning: No income insertion point in {stage.month}")
+                stage.new_income = []
+                continue
+            savings_marker = handler.find_section_marker(stage.month, "savings")
+            if savings_marker is None:
+                print(f"Warning: No savings marker in {stage.month}")
+                stage.new_income = []
+                continue
+            last_income_data = savings_marker - 3
+            available = last_income_data - first_empty + 1
+            insert_needed = max(0, len(stage.new_income) - available)
+            stage.income_start_row = first_empty
+            stage.income_insert_needed = insert_needed
+
+    staged = StagedPipelineResult()
+    for ws_name, stage in stages.items():
+        key = (stage.month, stage.year)
+        staged.month_stages[key] = stage
+
+    return staged, changes
+
+
+def _print_changes(changes):
+    """Print a summary of classification changes."""
+    print(f"\nCategory changes ({len(changes)}):")
+    for c in changes:
+        source_tag = c.source.upper()
+        old_cat = c.old_category or "(empty)"
+        old_sub = c.old_subcategory or "(empty)"
+        new_cat = c.new_category or "(empty)"
+        new_sub = c.new_subcategory or "(empty)"
+        if c.row_type == "income":
+            print(f"  [{source_tag:>6}] {c.lookup_key}: {old_cat} → {new_cat}")
+        else:
+            cat_change = f"{old_cat} → {new_cat}" if old_cat != new_cat else new_cat
+            sub_change = f"{old_sub} → {new_sub}" if old_sub != new_sub else ""
+            detail = cat_change + (f" / {sub_change}" if sub_change else "")
+            print(f"  [{source_tag:>6}] {c.lookup_key}: {detail}")
+
+
+def _review_lookup_changes(changes, categories=None):
+    """Interactive per-entry lookup review with edit and back support.
+
+    Args:
+        changes: list[RowChange] to review.
+        categories: Optional dict of {category: [subcategories]} for
+            category selection during edits.
+
+    Returns:
+        list[RowChange] that the user confirmed for lookup update.
+    """
+    from depensage.sheets.cli_review import _prompt_subcategory
+
+    confirmed = []
+    i = 0
+
+    while i < len(changes):
+        c = changes[i]
+        source_tag = c.source.upper()
+        old_cat = c.old_category or "(empty)"
+        old_sub = c.old_subcategory or "(empty)"
+        new_cat = c.new_category or "(empty)"
+        new_sub = c.new_subcategory or "(empty)"
+
+        print(f"\n  [{source_tag}] {c.lookup_key}")
+        print(f"    Category:    {old_cat} → {new_cat}")
+        print(f"    Subcategory: {old_sub} → {new_sub}")
+
+        prompt_parts = ["y(es)", "n(o)", "e(dit)"]
+        if i > 0:
+            prompt_parts.append("b(ack)")
+        prompt_parts.append("q(uit)")
+        prompt_str = " / ".join(prompt_parts)
+
+        try:
+            ans = input(f"  Update lookup? [{prompt_str}] ").strip().lower()
+        except EOFError:
+            break
+
+        if ans == "q":
+            break
+        elif ans == "b" and i > 0:
+            removed = confirmed.pop() if confirmed and confirmed[-1] is changes[i - 1] else None
+            if removed:
+                print(f"  ← Undid: {removed.lookup_key}")
+            i -= 1
+            continue
+        elif ans == "y":
+            if c.new_category:
+                confirmed.append(c)
+                print(f"  → Will update: {c.lookup_key} → {c.new_category}"
+                      + (f" / {c.new_subcategory}" if c.new_subcategory else ""))
+            else:
+                print("  Skipped (empty category)")
+        elif ans == "e":
+            # Free edit mode
+            if categories:
+                cat_list = list(categories.keys())
+                print()
+                for j, cat in enumerate(cat_list, 1):
+                    print(f"    {j:2d}. {cat}")
+                while True:
+                    cat_choice = input("\n  Category #: ").strip()
+                    try:
+                        idx = int(cat_choice) - 1
+                        if 0 <= idx < len(cat_list):
+                            break
+                    except ValueError:
+                        pass
+                    print("  Invalid choice, try again.")
+                edited_cat = cat_list[idx]
+                edited_sub = _prompt_subcategory(categories[edited_cat])
+            else:
+                edited_cat = input("  Category: ").strip()
+                edited_sub = input("  Subcategory: ").strip()
+
+            if edited_cat:
+                from depensage.engine.staging import RowChange
+                edited_change = RowChange(
+                    month=c.month, row_type=c.row_type, source=c.source,
+                    lookup_key=c.lookup_key,
+                    old_category=c.old_category, new_category=edited_cat,
+                    old_subcategory=c.old_subcategory, new_subcategory=edited_sub,
+                )
+                confirmed.append(edited_change)
+                print(f"  → Will update: {c.lookup_key} → {edited_cat}"
+                      + (f" / {edited_sub}" if edited_sub else ""))
+            else:
+                print("  Skipped (empty category)")
+        # 'n' or anything else → skip
+        i += 1
+
+    return confirmed
+
+
+def _do_lookup_updates(confirmed_changes):
+    """Apply confirmed lookup changes to the classifier files."""
+    if not confirmed_changes:
+        return
+
+    from depensage.engine.lookup_updater import apply_lookup_updates
+    from depensage.classifier.bank_lookup import BankLookupClassifier
+    from depensage.classifier.income_lookup import IncomeLookupClassifier
+
+    cc_cls = LookupClassifier()
+    bank_cls = BankLookupClassifier()
+    income_cls = IncomeLookupClassifier()
+    updated = apply_lookup_updates(confirmed_changes, cc_cls, bank_cls, income_cls)
+    if updated:
+        print(f"Updated lookup tables: {', '.join(updated)}")
+
+
+def _commit_staged(staged, handlers):
+    """Write staged data to the spreadsheet and print results."""
+    result = staged.commit(handlers)
+    print(f"\nCommitted:")
+    for mr in result.months:
+        parts = [f"{mr.written} written, {mr.duplicates} duplicates"]
+        if mr.income_written or mr.income_duplicates:
+            parts.append(
+                f"{mr.income_written} income, {mr.income_duplicates} income dupes"
+            )
+        print(f"  {mr.month} {mr.year}: {', '.join(parts)}")
+    return result
+
+
 def cmd_process(args):
     """Process CC and bank statement files through the automated pipeline."""
     from depensage.engine.pipeline import run_pipeline
@@ -138,20 +357,8 @@ def cmd_process(args):
         print("\nNothing to write (all duplicates or empty).")
         return
 
-    # Fetch categories with subcategories for XLSX highlighting
-    categories_with_subcats = set()
-    try:
-        # Use any handler to read the Categories sheet
-        if isinstance(handlers, dict):
-            any_handler = next(iter(handlers.values()))
-        else:
-            any_handler = handlers
-        cats = fetch_categories(any_handler)
-        categories_with_subcats = {
-            cat for cat, subcats in cats.items() if subcats
-        }
-    except Exception:
-        pass  # gracefully degrade — highlight all empty subcats
+    # Fetch categories for highlighting and lookup review
+    categories_with_subcats = _get_categories_with_subcats(handlers)
 
     # Export XLSX for review
     xlsx_path = staged.export_xlsx(
@@ -161,57 +368,51 @@ def cmd_process(args):
 
     auto_confirm = getattr(args, "auto_confirm", False)
     if auto_confirm:
-        result = staged.commit(handlers)
-    else:
+        _commit_staged(staged, handlers)
+        return
+
+    try:
+        confirm = input("\nWrite to spreadsheet? [y/N/e(dit)] ")
+    except EOFError:
+        confirm = "n"
+    choice = confirm.strip().lower()
+
+    if choice == "y":
+        _commit_staged(staged, handlers)
+        return
+
+    if choice != "e":
+        print("Aborted.")
+        return
+
+    # --- Edit flow ---
+    print(f"\nEdit the staged file: {xlsx_path}")
+    print("When done, choose how to proceed.\n")
+
+    while True:
         try:
-            confirm = input("\nWrite to spreadsheet? [y/N/e] ")
+            edit_choice = input("  a(bort) / r(eview lookup) / c(ommit) ? ").strip().lower()
         except EOFError:
-            confirm = "n"
-        choice = confirm.strip().lower()
-        if choice == "e":
-            year_flag = f"--year {args.year} " if args.year else ""
-            print(f"\nEdit the staged file, then commit:")
-            print(f"  python -m depensage.sheets.cli {year_flag}commit {xlsx_path}")
-            return
-        if choice != "y":
+            edit_choice = "a"
+
+        if edit_choice == "a":
             print("Aborted.")
             return
-        result = staged.commit(handlers)
 
-    print(f"\nCommitted:")
-    for mr in result.months:
-        parts = [f"{mr.written} written, {mr.duplicates} duplicates"]
-        if mr.income_written or mr.income_duplicates:
-            parts.append(
-                f"{mr.income_written} income, {mr.income_duplicates} income dupes"
-            )
-        print(f"  {mr.month} {mr.year}: {', '.join(parts)}")
+        if edit_choice in ("r", "c"):
+            break
+        print("  Invalid choice.")
 
-
-def cmd_commit(args):
-    """Commit an edited staged XLSX to the spreadsheet."""
-    from depensage.engine.staging import import_staged_xlsx
-    from depensage.engine.lookup_updater import apply_lookup_updates
-    from depensage.classifier.bank_lookup import BankLookupClassifier
-    from depensage.classifier.income_lookup import IncomeLookupClassifier
-
-    xlsx_path = args.xlsx
-    if not os.path.exists(xlsx_path):
-        print(f"File not found: {xlsx_path}", file=sys.stderr)
-        sys.exit(1)
-
-    print(f"Reading staged XLSX: {xlsx_path}")
-    stages, changes = import_staged_xlsx(xlsx_path)
-
-    if not stages:
-        print("No data found in XLSX.")
+    # Import edited XLSX
+    edited_staged, changes = _import_and_derive_coordinates(xlsx_path, handlers)
+    if edited_staged is None:
         return
 
     # Show what will be committed
-    total_expenses = sum(len(s.new_expenses) for s in stages.values())
-    total_income = sum(len(s.new_income) for s in stages.values())
-    print(f"\nStaged: {total_expenses} expenses, {total_income} income")
-    for ws_name, stage in stages.items():
+    total_exp = sum(len(s.new_expenses) for s in edited_staged.month_stages.values())
+    total_inc = sum(len(s.new_income) for s in edited_staged.month_stages.values())
+    print(f"\nStaged: {total_exp} expenses, {total_inc} income")
+    for stage in edited_staged.sorted_stages():
         parts = []
         if stage.new_expenses:
             parts.append(f"{len(stage.new_expenses)} expenses")
@@ -220,116 +421,56 @@ def cmd_commit(args):
         if parts:
             print(f"  {stage.month} {stage.year}: {', '.join(parts)}")
 
-    # Show changes
-    if changes:
-        print(f"\nCategory changes ({len(changes)}):")
-        for c in changes:
-            source_tag = c.source.upper()
-            old_cat = c.old_category or "(empty)"
-            old_sub = c.old_subcategory or "(empty)"
-            new_cat = c.new_category or "(empty)"
-            new_sub = c.new_subcategory or "(empty)"
-            if c.row_type == "income":
-                print(f"  [{source_tag:>6}] {c.lookup_key}: {old_cat} → {new_cat}")
-            else:
-                cat_change = f"{old_cat} → {new_cat}" if old_cat != new_cat else new_cat
-                sub_change = f"{old_sub} → {new_sub}" if old_sub != new_sub else ""
-                detail = cat_change + (f" / {sub_change}" if sub_change else "")
-                print(f"  [{source_tag:>6}] {c.lookup_key}: {detail}")
+    # Lookup review
+    if edit_choice == "r" and changes:
+        _print_changes(changes)
 
-        # Prompt for lookup updates
+        # Fetch full categories for interactive review
+        categories = None
         try:
-            choice = input(
-                f"\nUpdate lookup for all {len(changes)} change(s)? [y/n/r(eview)] "
-            )
-        except EOFError:
-            choice = "n"
+            if isinstance(handlers, dict):
+                any_handler = next(iter(handlers.values()))
+            else:
+                any_handler = handlers
+            categories = fetch_categories(any_handler)
+        except Exception:
+            pass
 
-        choice = choice.strip().lower()
-        if choice == "y":
-            cc_cls = LookupClassifier()
-            bank_cls = BankLookupClassifier()
-            income_cls = IncomeLookupClassifier()
-            updated = apply_lookup_updates(changes, cc_cls, bank_cls, income_cls)
-            if updated:
-                print(f"Updated lookup tables: {', '.join(updated)}")
-        elif choice == "r":
-            cc_cls = LookupClassifier()
-            bank_cls = BankLookupClassifier()
-            income_cls = IncomeLookupClassifier()
-            for c in changes:
-                source_tag = c.source.upper()
-                old_display = c.old_category or "(empty)"
-                new_display = c.new_category or "(empty)"
-                print(f"\n  [{source_tag}] {c.lookup_key}: {old_display} → {new_display}")
-                try:
-                    ans = input("  Update lookup? [y/n] ").strip().lower()
-                except EOFError:
-                    ans = "n"
-                if ans == "y" and c.new_category:
-                    apply_lookup_updates([c], cc_cls, bank_cls, income_cls)
-                    print("  → Updated")
-        else:
-            print("Skipping lookup updates.")
-    else:
+        confirmed = _review_lookup_changes(changes, categories)
+        _do_lookup_updates(confirmed)
+    elif edit_choice == "r" and not changes:
         print("\nNo category changes detected.")
 
-    # Commit to spreadsheet
+    if not edited_staged.has_writes():
+        print("\nNothing to write.")
+        return
+
+    _commit_staged(edited_staged, handlers)
+
+
+def cmd_commit(args):
+    """Commit a staged XLSX to the spreadsheet (no lookup review)."""
+    xlsx_path = args.xlsx
+    if not os.path.exists(xlsx_path):
+        print(f"File not found: {xlsx_path}", file=sys.stderr)
+        sys.exit(1)
+
     handlers = get_handlers_for_pipeline(args)
+    staged, changes = _import_and_derive_coordinates(xlsx_path, handlers)
+    if staged is None:
+        return
 
-    # Re-derive write coordinates from the live sheet
-    from depensage.sheets.spreadsheet_handler import SECTION_MARKERS
-
-    if not isinstance(handlers, dict):
-        single = handlers
-        get_h = lambda y: single
-    else:
-        get_h = lambda y: handlers[y]
-
-    for ws_name, stage in stages.items():
-        handler = get_h(stage.year)
-
-        # Expenses
+    total_exp = sum(len(s.new_expenses) for s in staged.month_stages.values())
+    total_inc = sum(len(s.new_income) for s in staged.month_stages.values())
+    print(f"\nStaged: {total_exp} expenses, {total_inc} income")
+    for stage in staged.sorted_stages():
+        parts = []
         if stage.new_expenses:
-            first_empty = handler.find_first_empty_expense_row(stage.month)
-            marker_row = handler.find_section_marker(stage.month, "budget")
-            if marker_row is None:
-                print(f"Warning: No budget marker in {stage.month}, skipping expenses")
-                stage.new_expenses = []
-                continue
-            rows_needed = len(stage.new_expenses)
-            last_data_row = marker_row - 2
-            available = last_data_row - first_empty + 1
-            insert_needed = max(0, rows_needed - available)
-
-            stage.expense_start_row = first_empty
-            stage.expense_insert_needed = insert_needed
-
-        # Income
+            parts.append(f"{len(stage.new_expenses)} expenses")
         if stage.new_income:
-            first_empty = handler.find_first_empty_income_row(stage.month)
-            if first_empty is None:
-                print(f"Warning: No income insertion point in {stage.month}")
-                stage.new_income = []
-                continue
-            savings_marker = handler.find_section_marker(stage.month, "savings")
-            if savings_marker is None:
-                print(f"Warning: No savings marker in {stage.month}")
-                stage.new_income = []
-                continue
-            last_income_data = savings_marker - 3
-            available = last_income_data - first_empty + 1
-            insert_needed = max(0, len(stage.new_income) - available)
-
-            stage.income_start_row = first_empty
-            stage.income_insert_needed = insert_needed
-
-    # Build a StagedPipelineResult from the imported stages and commit
-    from depensage.engine.staging import StagedPipelineResult
-    staged = StagedPipelineResult()
-    for ws_name, stage in stages.items():
-        key = (stage.month, stage.year)
-        staged.month_stages[key] = stage
+            parts.append(f"{len(stage.new_income)} income")
+        if parts:
+            print(f"  {stage.month} {stage.year}: {', '.join(parts)}")
 
     if not staged.has_writes():
         print("\nNothing to write.")
@@ -343,13 +484,7 @@ def cmd_commit(args):
         print("Aborted.")
         return
 
-    result = staged.commit(handlers)
-    print(f"\nCommitted:")
-    for mr in result.months:
-        parts = [f"{mr.written} written"]
-        if mr.income_written:
-            parts.append(f"{mr.income_written} income")
-        print(f"  {mr.month} {mr.year}: {', '.join(parts)}")
+    _commit_staged(staged, handlers)
 
 
 def cmd_verify(args):

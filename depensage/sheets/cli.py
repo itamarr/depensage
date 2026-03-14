@@ -86,7 +86,7 @@ def main():
     carryover_parser.add_argument("--dest-year", help="Destination year (default: --year)")
 
     commit_parser = subparsers.add_parser(
-        "commit", help="Commit an edited staged XLSX to the spreadsheet"
+        "commit", help="Commit a staged XLSX to the spreadsheet (no lookup review)"
     )
     commit_parser.add_argument(
         "xlsx", help="Path to the staged XLSX file"

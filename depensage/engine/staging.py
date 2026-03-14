@@ -319,6 +319,13 @@ class StagedPipelineResult:
         )
 
 
+def _cell_str(value):
+    """Normalize a cell value to a string, treating None as empty."""
+    if value is None:
+        return ""
+    return str(value).strip()
+
+
 def import_staged_xlsx(path):
     """Read an edited XLSX and reconstruct MonthStage data with change detection.
 
@@ -329,7 +336,7 @@ def import_staged_xlsx(path):
     """
     import openpyxl
 
-    wb = openpyxl.load_workbook(path, data_only=True)
+    wb = openpyxl.load_workbook(path)
 
     # Read metadata
     if "_row_meta" not in wb.sheetnames:
@@ -342,7 +349,10 @@ def import_staged_xlsx(path):
     for row in meta_rows:
         month, row_type, row_index, orig_cat, orig_sub = row
         meta_by_key.setdefault((month, row_type), []).append(
-            RowMeta(orig_category=orig_cat or "", orig_subcategory=orig_sub or "")
+            RowMeta(
+                orig_category=_cell_str(orig_cat),
+                orig_subcategory=_cell_str(orig_sub),
+            )
         )
 
     stages = {}
@@ -388,9 +398,7 @@ def import_staged_xlsx(path):
                 # Ensure 7 columns
                 while len(row) < 7:
                     row.append("")
-                stage.new_expenses.append(
-                    [str(v) if v is not None else "" for v in row]
-                )
+                stage.new_expenses.append([_cell_str(v) for v in row])
                 i += 1
 
         # Skip blank rows
@@ -406,9 +414,7 @@ def import_staged_xlsx(path):
                 row = list(rows[i])[:4]  # income is 4 columns
                 while len(row) < 4:
                     row.append("")
-                stage.new_income.append(
-                    [str(v) if v is not None else "" for v in row]
-                )
+                stage.new_income.append([_cell_str(v) for v in row])
                 i += 1
 
         stages[ws_name] = stage
@@ -457,5 +463,13 @@ def import_staged_xlsx(path):
                     old_subcategory=meta.orig_subcategory,
                     new_subcategory=new_sub,
                 ))
+
+    total_exp = sum(len(s.new_expenses) for s in stages.values())
+    total_inc = sum(len(s.new_income) for s in stages.values())
+    logger.info(
+        f"Imported {len(stages)} month sheets: "
+        f"{total_exp} expenses, {total_inc} income, "
+        f"{len(changes)} changes detected"
+    )
 
     return stages, changes
