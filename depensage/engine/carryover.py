@@ -157,7 +157,7 @@ def _write_budget_carry_formulas(handler, dest_month, source_month):
             continue
 
         actual_row = start_row + i
-        formula = f"='{source_month}'!B{actual_row}"
+        formula = f"=MAX('{source_month}'!B{actual_row},0)"
         if handler.update_cell(dest_month, f"E{actual_row}", formula):
             written += 1
 
