@@ -134,10 +134,41 @@ def _read_income_total(handler, sheet_name):
     return None
 
 
-def _write_budget_accumulated(handler, sheet_name, carry_values):
-    """Write carry-over values to budget Accumulated (E) column.
+def _write_budget_carry_formulas(handler, dest_month, source_month):
+    """Write carry-over formulas to budget Accumulated (E) column.
 
-    Matches by (category, subcategory) in columns G and F.
+    For each CARRY-flagged budget line, writes a formula referencing
+    the source month's Remaining (B) column at the same row.
+    Budget layout is identical across months (same rows, same categories).
+    """
+    start_row, rows = handler.read_section_range(
+        dest_month, "budget", "B:H", end_section="income"
+    )
+    if not rows:
+        logger.error(f"Could not read budget section in {dest_month}")
+        return 0
+
+    written = 0
+    for i, row in enumerate(rows):
+        if len(row) < 7:
+            continue
+        carry_flag = row[6] if len(row) > 6 else ""
+        if carry_flag != "CARRY":
+            continue
+
+        actual_row = start_row + i
+        formula = f"='{source_month}'!B{actual_row}"
+        if handler.update_cell(dest_month, f"E{actual_row}", formula):
+            written += 1
+
+    return written
+
+
+def _write_budget_accumulated_static(handler, sheet_name, carry_values):
+    """Write carry-over values to budget Accumulated (E) column (static).
+
+    Used for cross-year carryover where formulas can't reference
+    a different spreadsheet. Matches by (category, subcategory).
     """
     start_row, rows = handler.read_section_range(
         sheet_name, "budget", "B:H", end_section="income"
@@ -146,7 +177,6 @@ def _write_budget_accumulated(handler, sheet_name, carry_values):
         logger.error(f"Could not read budget section in {sheet_name}")
         return 0
 
-    # Build lookup from carry values
     carry_lookup = {
         (v["category"], v["subcategory"]): v["remaining"]
         for v in carry_values
@@ -275,9 +305,30 @@ def run_carryover(source_handler, source_month, dest_handler, dest_month):
     """
     logger.info(f"Running carryover: {source_month} → {dest_month}")
 
-    # 1. Read source budget remaining for CARRY lines
-    carry_values = _read_budget_carry_values(source_handler, source_month)
-    logger.info(f"Read {len(carry_values)} CARRY budget lines from {source_month}")
+    same_spreadsheet = (
+        hasattr(source_handler, 'spreadsheet_id')
+        and hasattr(dest_handler, 'spreadsheet_id')
+        and source_handler.spreadsheet_id == dest_handler.spreadsheet_id
+    )
+
+    # 1. Write budget carry to destination
+    if same_spreadsheet:
+        # Same spreadsheet: write formulas referencing the source month
+        budget_written = _write_budget_carry_formulas(
+            dest_handler, dest_month, source_month
+        )
+        logger.info(
+            f"Wrote {budget_written} budget carry formulas "
+            f"(={source_month}!B...) to {dest_month}"
+        )
+    else:
+        # Cross-year: read values and write static (can't formula across sheets)
+        carry_values = _read_budget_carry_values(source_handler, source_month)
+        logger.info(f"Read {len(carry_values)} CARRY budget lines from {source_month}")
+        budget_written = _write_budget_accumulated_static(
+            dest_handler, dest_month, carry_values
+        )
+        logger.info(f"Wrote {budget_written} budget accumulated values to {dest_month}")
 
     # 2. Read source savings totals
     savings_totals = _read_savings_totals(source_handler, source_month)
@@ -286,10 +337,6 @@ def run_carryover(source_handler, source_month, dest_handler, dest_month):
     # 3. Read source income total
     income_total = _read_income_total(source_handler, source_month)
     logger.info(f"Source income total: {income_total}")
-
-    # 4. Write budget accumulated to destination
-    budget_written = _write_budget_accumulated(dest_handler, dest_month, carry_values)
-    logger.info(f"Wrote {budget_written} budget accumulated values to {dest_month}")
 
     # 5. Write savings accumulated to destination
     savings_written = _write_savings_accumulated(dest_handler, dest_month, savings_totals)
