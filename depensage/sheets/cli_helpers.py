@@ -80,7 +80,10 @@ def get_handlers_for_pipeline(args):
 
     handlers = {}
     for y, sid in spreadsheets.items():
-        handlers[int(y)] = _authenticate_handler(sid, credentials)
+        try:
+            handlers[int(y)] = _authenticate_handler(sid, credentials)
+        except ValueError:
+            continue  # skip non-year keys like "template"
     return handlers
 
 
