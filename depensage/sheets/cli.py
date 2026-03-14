@@ -12,6 +12,7 @@ from depensage.classifier.cc_lookup import DEFAULT_LOOKUP_PATH
 from depensage.sheets.cli_commands import (
     cmd_list_sheets, cmd_read, cmd_formulas, cmd_metadata,
     cmd_build_lookup, cmd_process, cmd_carryover, cmd_consolidate_patterns,
+    cmd_verify,
 )
 from depensage.sheets.cli_review import (
     cmd_review, cmd_review_bank, cmd_review_income,
@@ -80,6 +81,13 @@ def main():
     carryover_parser.add_argument("--source-year", help="Source year (default: --year)")
     carryover_parser.add_argument("--dest-year", help="Destination year (default: --year)")
 
+    verify_parser = subparsers.add_parser(
+        "verify", help="Verify CC charges against bank lump sums"
+    )
+    verify_parser.add_argument(
+        "statement", help="Path to bank transcript file"
+    )
+
     subparsers.add_parser(
         "consolidate-patterns",
         help="Find duplicate exact entries that should be prefix patterns",
@@ -101,6 +109,7 @@ def main():
         "review-income": cmd_review_income,
         "process": cmd_process,
         "carryover": cmd_carryover,
+        "verify": cmd_verify,
         "consolidate-patterns": cmd_consolidate_patterns,
     }
     commands[args.command](args)

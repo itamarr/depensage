@@ -376,6 +376,33 @@ class SheetHandler:
             logger.error(f"Failed to read expense rows from {sheet_name}: {e}")
             return []
 
+    def read_expense_rows_with_status(self, sheet_name):
+        """Read expense data rows including status column (B2:H).
+
+        Same as read_expense_rows but includes column H (status: CC/BANK/empty).
+
+        Returns:
+            List of rows, each a list [business_name, notes, subcategory,
+            amount, category, date_serial, status]. Returns empty list if
+            marker not found.
+        """
+        marker_row = self.find_section_marker(sheet_name, "budget")
+        if not marker_row or marker_row <= 3:
+            return []
+        last_data_row = marker_row - 2
+        try:
+            result = self.sheets_service.values().get(
+                spreadsheetId=self.spreadsheet_id,
+                range=f'{sheet_name}!B2:H{last_data_row}',
+                valueRenderOption='UNFORMATTED_VALUE',
+            ).execute()
+            return result.get('values', [])
+        except Exception as e:
+            logger.error(
+                f"Failed to read expense rows with status from {sheet_name}: {e}"
+            )
+            return []
+
     def find_first_empty_expense_row(self, sheet_name):
         """Find first empty row between row 2 and the budget marker.
 

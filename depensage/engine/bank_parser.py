@@ -34,11 +34,18 @@ _COL_PURPOSE = "עבור"
 
 
 @dataclass
+class CCLumpSum:
+    """A single CC lump sum charge from the bank transcript."""
+    date: object  # datetime
+    amount: float
+
+
+@dataclass
 class BankParseResult:
     """Result of parsing a bank transcript."""
     expenses: pd.DataFrame  # Debits (non-CC), cols: date, action, details, amount, reference
     income: pd.DataFrame    # Credits, cols: date, action, details, amount, reference
-    cc_lump_sums: List[float] = field(default_factory=list)  # CC charge amounts for verification
+    cc_lump_sums: List[CCLumpSum] = field(default_factory=list)
 
 
 def detect_bank_transcript(file_path):
@@ -142,7 +149,11 @@ def parse_bank_transcript(file_path):
         # Split: CC lump sums, expenses (other debits), income (credits)
         cc_mask = result["action"].str.contains(CC_CHARGE_ACTION, na=False)
         cc_rows = result[cc_mask]
-        cc_lump_sums = cc_rows["debit"].dropna().tolist()
+        cc_lump_sums = [
+            CCLumpSum(date=row["date"], amount=row["debit"])
+            for _, row in cc_rows.iterrows()
+            if pd.notna(row["debit"])
+        ]
 
         non_cc = result[~cc_mask]
         out_cols = ["date", "action", "details", "amount", "reference"]

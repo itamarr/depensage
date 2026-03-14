@@ -394,7 +394,8 @@ class TestPipelineBankTransactions(unittest.TestCase):
             income_classifier=self.income_classifier,
         )
 
-        self.assertIn(5000.0, result.cc_lump_sums)
+        lump_amounts = [ls.amount for ls in result.cc_lump_sums]
+        self.assertIn(5000.0, lump_amounts)
         # Only the expense should be written, not the CC lump sum
         self.assertEqual(result.months[0].written, 1)
 

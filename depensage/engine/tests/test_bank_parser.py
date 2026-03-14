@@ -86,10 +86,11 @@ class TestBankParser(unittest.TestCase):
         self.assertEqual(len(result.income), 1)
         self.assertAlmostEqual(result.income.iloc[0]["amount"], 27000.00)
 
-        # CC lump sums: 2 charges
+        # CC lump sums: 2 charges with dates
         self.assertEqual(len(result.cc_lump_sums), 2)
-        self.assertAlmostEqual(result.cc_lump_sums[0], 9090.54)
-        self.assertAlmostEqual(result.cc_lump_sums[1], 4043.30)
+        self.assertAlmostEqual(result.cc_lump_sums[0].amount, 9090.54)
+        self.assertAlmostEqual(result.cc_lump_sums[1].amount, 4043.30)
+        self.assertIsNotNone(result.cc_lump_sums[0].date)
 
     def test_expense_columns(self):
         """Expenses DataFrame has expected columns."""

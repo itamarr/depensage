@@ -152,11 +152,55 @@ def cmd_process(args):
             print(f"    - {name}")
 
     if result.cc_lump_sums:
-        total = sum(result.cc_lump_sums)
+        total = sum(ls.amount for ls in result.cc_lump_sums)
         print(f"\n  CC lump sums from bank ({len(result.cc_lump_sums)}): "
               f"{total:,.2f}")
-        for amt in result.cc_lump_sums:
-            print(f"    - {amt:,.2f}")
+        for ls in result.cc_lump_sums:
+            date_str = ls.date.strftime("%Y-%m-%d") if hasattr(ls.date, "strftime") else str(ls.date)
+            print(f"    - {ls.amount:,.2f} ({date_str})")
+
+
+def cmd_verify(args):
+    """Verify CC charges against bank lump sums."""
+    from depensage.engine.bank_parser import detect_bank_transcript, parse_bank_transcript
+    from depensage.engine.verification import verify_cc_charges, format_verification_report
+    from depensage.sheets.cli_helpers import get_handlers_for_pipeline
+
+    path = args.statement
+    if not detect_bank_transcript(path):
+        print(f"Error: {path} is not a bank transcript")
+        return
+
+    bank_result = parse_bank_transcript(path)
+    if not bank_result or not bank_result.cc_lump_sums:
+        print("No CC lump sums found in bank transcript.")
+        return
+
+    handlers = get_handlers_for_pipeline(args)
+    year = int(args.year) if args.year else None
+
+    if isinstance(handlers, dict):
+        if year is None:
+            print("Error: --year is required when multiple spreadsheets are configured.")
+            return
+        handler = handlers[year]
+        prev_handler = handlers.get(year - 1)
+    else:
+        handler = handlers
+        prev_handler = None
+
+    result = verify_cc_charges(
+        handler, bank_result.cc_lump_sums, year or 2026,
+        prev_year_handler=prev_handler,
+    )
+
+    print("\nCC Verification Report:")
+    print(format_verification_report(result))
+    if result.all_matched:
+        print("\n  All billing cycles match!")
+    else:
+        print(f"\n  {sum(1 for c in result.cycles if not c.matched)} "
+              f"cycle(s) have mismatches.")
 
 
 def cmd_carryover(args):

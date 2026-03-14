@@ -13,7 +13,7 @@ import pandas as pd
 
 from depensage.engine.statement_parser import StatementParser
 from depensage.engine.bank_parser import (
-    detect_bank_transcript, parse_bank_transcript, BankParseResult,
+    detect_bank_transcript, parse_bank_transcript, BankParseResult, CCLumpSum,
 )
 from depensage.engine.dedup import deduplicate, deduplicate_income
 from depensage.engine.formatter import (
@@ -44,7 +44,7 @@ class PipelineResult:
     unclassified: int
     months: list[MonthResult] = field(default_factory=list)
     unclassified_merchants: list[str] = field(default_factory=list)
-    cc_lump_sums: list[float] = field(default_factory=list)
+    cc_lump_sums: list[CCLumpSum] = field(default_factory=list)
 
 
 def run_pipeline(statement_paths, handlers, classifier, year=None,

@@ -1,10 +1,11 @@
 # Spreadsheet Structure
 
-The spreadsheet is entirely in Hebrew.
+Cell contents are in Hebrew. Sheet tab names are in **English** (January, February, ..., December). The code uses `strftime('%B')` to map dates to sheet names.
 
 ## Monthly Sheets (January–December)
 
 Each month has ~130 expense rows with columns (right-to-left):
+- **H:** סטטוס (Status, hidden) — "CC" (charged to bank), "BANK" (direct bank charge), or empty (pending CC charge). Used for reconciliation and CC verification.
 - **G:** תאריך (Date) — stored as serial numbers (days since 1899-12-30)
 - **F:** קטגוריה (Category) — from dropdown linked to Categories sheet
 - **E:** כמה (Amount) — in NIS
@@ -37,6 +38,22 @@ Migration script for sheets predating the marker system: `scripts/plant_section_
 | G | קטגוריה (Category) |
 | H | CARRY flag (hidden column, marks lines for carryover) |
 
+### Income Section Layout (columns D–G, relative to marker)
+
+| Row offset | Content |
+|------------|---------|
+| marker + 1 | הכנסות (Income header) |
+| marker + 2 | Column headers: הערות, כמה, קטגוריה, תאריך |
+| marker + 3+ | Data rows |
+| savings_marker - 2 | סה"כ (Total row) |
+
+| Column | Content |
+|--------|---------|
+| D | הערות (Comments — source/description of income) |
+| E | כמה (Amount) |
+| F | קטגוריה (Category — e.g., משכורת, קצבה, מתנה, מענק, העברה, החזר) |
+| G | תאריך (Date) |
+
 ### Savings Section Layout (columns A–G, relative to marker)
 
 | Column | Content |
@@ -49,13 +66,16 @@ Migration script for sheets predating the marker system: `scripts/plant_section_
 | F | צבור (Accumulated — carryover from previous month) |
 | G | קטגוריה (Goal name) |
 
-## Green Color-Coding (Charged vs. Pending)
+## Charged vs. Pending Status (Column H)
 
-Expenses highlighted green have been charged to the bank account. Non-green expenses are still pending on the credit card. This distinction is structurally important — the reconciliation section only works correctly when charged expenses are marked.
+Column H tracks whether an expense has been charged to the bank account:
+- **"CC"** — charged via credit card (transaction date day-of-month <= billing day 10)
+- **empty** — pending CC charge (date > 10, will be charged next billing cycle)
+- **"BANK"** — direct bank debit (mortgage, insurance, etc.)
 
-A custom **Apps Script `sumbycolor` function** sums green-highlighted cells. This function must be manually triggered by editing its cell.
+This replaces the legacy green color-coding system. The reconciliation section uses these statuses to match bank debits against recorded expenses.
 
-**Status**: This color-based system is fragile and slated for replacement with a proper status mechanism (see roadmap Phase 4).
+**Legacy**: The old `sumbycolor` Apps Script function may still exist in older sheets but is no longer the primary mechanism.
 
 ## Meta Sheets
 
