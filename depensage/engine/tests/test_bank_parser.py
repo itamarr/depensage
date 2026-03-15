@@ -62,15 +62,15 @@ class TestBankParser(unittest.TestCase):
     def test_parse_basic(self):
         """Parse a bank transcript with mixed debits, credits, and CC charges."""
         path = self._bank_excel([
-            ["01/01/2026", "פועלים-משכנתא", "812529", "812529",
+            ["01/01/2026", "הלוואת דיור", "812529", "812529",
              5061.82, None, 50000, "01/01/2026", "", ""],
-            ["01/01/2026", "מלאנוקס טכנולו", "123", "123",
+            ["01/01/2026", "חברה א", "123", "123",
              None, 27000.00, 77000, "01/01/2026", "", ""],
             ["01/10/2026", CC_CHARGE_ACTION, "", "8547994",
              9090.54, None, 67909.46, "01/10/2026", "", ""],
             ["01/10/2026", CC_CHARGE_ACTION, "", "8547994",
              4043.30, None, 63866.16, "01/10/2026", "", ""],
-            ["01/05/2026", "מכבי", "health", "999",
+            ["01/05/2026", "קופת חולים", "health", "999",
              350.00, None, 49650, "01/05/2026", "", ""],
         ])
 
@@ -95,7 +95,7 @@ class TestBankParser(unittest.TestCase):
     def test_expense_columns(self):
         """Expenses DataFrame has expected columns."""
         path = self._bank_excel([
-            ["02/01/2026", "פועלים-משכנתא", "details", "ref123",
+            ["02/01/2026", "הלוואת דיור", "details", "ref123",
              5000.00, None, 50000, "02/01/2026", "", ""],
         ])
         result = parse_bank_transcript(path)
@@ -105,7 +105,7 @@ class TestBankParser(unittest.TestCase):
     def test_income_columns(self):
         """Income DataFrame has expected columns."""
         path = self._bank_excel([
-            ["02/01/2026", "מלאנוקס טכנולו", "emp123", "ref",
+            ["02/01/2026", "חברה א", "emp123", "ref",
              None, 25000.00, 75000, "02/01/2026", "", ""],
         ])
         result = parse_bank_transcript(path)
@@ -126,7 +126,7 @@ class TestBankParser(unittest.TestCase):
     def test_no_cc_charges(self):
         """No CC charges → empty cc_lump_sums."""
         path = self._bank_excel([
-            ["01/01/2026", "פועלים-משכנתא", "", "812529",
+            ["01/01/2026", "הלוואת דיור", "", "812529",
              5000.00, None, 50000, "01/01/2026", "", ""],
         ])
         result = parse_bank_transcript(path)
@@ -145,7 +145,7 @@ class TestBankParser(unittest.TestCase):
     def test_detect_bank_transcript(self):
         """detect_bank_transcript identifies bank files correctly."""
         path = self._bank_excel([
-            ["01/01/2026", "פועלים-משכנתא", "", "",
+            ["01/01/2026", "הלוואת דיור", "", "",
              5000.00, None, 50000, "01/01/2026", "", ""],
         ])
         self.assertTrue(detect_bank_transcript(path))
@@ -180,12 +180,43 @@ class TestBankParser(unittest.TestCase):
     def test_dates_parsed_correctly(self):
         """Dates are parsed as datetime objects."""
         path = self._bank_excel([
-            ["03/05/2026", "מכבי", "", "",
+            ["03/05/2026", "קופת חולים", "", "",
              200.00, None, 50000, "03/05/2026", "", ""],
         ])
         result = parse_bank_transcript(path)
         self.assertEqual(result.expenses.iloc[0]["date"].year, 2026)
         self.assertEqual(result.expenses.iloc[0]["date"].month, 3)
+
+    def test_monthly_balances_extracted(self):
+        """Monthly balances use the last balance per month."""
+        path = self._bank_excel([
+            ["01/01/2026", "הוראת קבע", "", "",
+             2000, None, 40000, "01/01/2026", "", ""],
+            ["01/15/2026", "העברה", "", "",
+             500, None, 38000, "01/15/2026", "", ""],
+            ["01/28/2026", "תשלום", "", "",
+             700, None, 37300, "01/28/2026", "", ""],
+            ["02/01/2026", "העברה נכנסת", "", "",
+             None, 10000, 47300, "02/01/2026", "", ""],
+        ])
+        result = parse_bank_transcript(path)
+        self.assertIn((2026, 1), result.monthly_balances)
+        self.assertIn((2026, 2), result.monthly_balances)
+        # January: last transaction is 01/28 with balance 37300
+        self.assertAlmostEqual(result.monthly_balances[(2026, 1)], 37300)
+        # February: only transaction is 02/01 with balance 47300
+        self.assertAlmostEqual(result.monthly_balances[(2026, 2)], 47300)
+
+    def test_monthly_balances_empty_when_no_balance_column(self):
+        """No balance data returns empty dict."""
+        # Use headers without balance column
+        headers = ["תאריך", "הפעולה", "פרטים", "אסמכתא", "חובה", "זכות",
+                   "תאריך ערך", "לטובת", "עבור"]
+        path = self._bank_excel([
+            ["01/01/2026", "תשלום", "", "", 500, None, "01/01/2026", "", ""],
+        ], headers=headers)
+        result = parse_bank_transcript(path)
+        self.assertEqual(result.monthly_balances, {})
 
 
 if __name__ == "__main__":

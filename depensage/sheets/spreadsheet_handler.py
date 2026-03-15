@@ -831,6 +831,38 @@ class SheetHandler:
             logger.error(f"Failed to update cell {cell_ref} in {sheet_name}: {e}")
             return False
 
+    def find_reconciliation_label_row(self, sheet_name, label):
+        """Find a row in the reconciliation section by its label in column F/G.
+
+        The reconciliation section is a series of key-value pairs. Labels
+        appear in columns F or G, values in column E. This scans from
+        the reconciliation marker downward.
+
+        Args:
+            sheet_name: Name of the sheet.
+            label: Hebrew label to search for (e.g. 'כסף בעו"ש').
+
+        Returns:
+            1-based row number, or None if not found.
+        """
+        cached = self._get_cached(sheet_name)
+        if not cached:
+            return None
+        recon_marker = cached.markers.get("reconciliation")
+        if not recon_marker:
+            return None
+        # Scan from marker onward (reconciliation is last section)
+        start_idx = recon_marker  # 0-based index = marker row (skip marker itself)
+        end_idx = min(start_idx + 30, len(cached.raw_data))
+        for i in range(start_idx, end_idx):
+            row = cached.raw_data[i]
+            # Check columns B through G (indices 1-6) for the label
+            for col_idx in range(1, min(7, len(row))):
+                cell = row[col_idx]
+                if isinstance(cell, str) and label in cell:
+                    return i + 1  # 1-based
+        return None
+
     def extract_historical_data(self):
         """
         Extract historical transaction data from all month sheets.

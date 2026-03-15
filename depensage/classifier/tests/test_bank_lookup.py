@@ -49,10 +49,10 @@ class TestBankLookupClassifier(unittest.TestCase):
         self.lookup_path = os.path.join(self.tmpdir, "bank_lookup.json")
         data = {
             "exact": [
-                {"action": "פועלים-משכנתא", "category": "משכנתא",
-                 "subcategory": "", "business_name": "פועלים משכנתא"},
-                {"action": "מכבי", "category": "בריאות",
-                 "subcategory": "מכבי", "business_name": "מכבי"},
+                {"action": "הלוואת דיור", "category": "משכנתא",
+                 "subcategory": "", "business_name": "הלוואת דיור"},
+                {"action": "קופת חולים", "category": "בריאות",
+                 "subcategory": "קופת חולים", "business_name": "קופת חולים"},
             ],
             "patterns": [
                 {"prefix": "ני\"ע", "category": "חסכון",
@@ -64,7 +64,7 @@ class TestBankLookupClassifier(unittest.TestCase):
         self.classifier = BankLookupClassifier(self.lookup_path)
 
     def test_exact_match(self):
-        result = self.classifier.classify_one("פועלים-משכנתא")
+        result = self.classifier.classify_one("הלוואת דיור")
         self.assertIsNotNone(result)
         self.assertEqual(result.category, "משכנתא")
         self.assertEqual(result.subcategory, "")
@@ -81,7 +81,7 @@ class TestBankLookupClassifier(unittest.TestCase):
     def test_classify_dataframe(self):
         df = pd.DataFrame({
             "date": pd.to_datetime(["2026-01-01", "2026-01-05", "2026-01-10"]),
-            "action": ["פועלים-משכנתא", "מכבי", "unknown"],
+            "action": ["הלוואת דיור", "קופת חולים", "unknown"],
             "details": ["", "", ""],
             "amount": [5000, 300, 100],
             "reference": ["", "", ""],
@@ -187,12 +187,12 @@ class TestBankLookupClassifier(unittest.TestCase):
         """Action-based matching should take priority over details matching."""
         data = {
             "exact": [
-                {"action": "מכבי", "category": "בריאות",
-                 "subcategory": "מכבי", "business_name": "מכבי"},
+                {"action": "קופת חולים", "category": "בריאות",
+                 "subcategory": "קופת חולים", "business_name": "קופת חולים"},
             ],
             "patterns": [],
             "details_matches": [
-                {"recipient": "מכבי", "category": "שונות",
+                {"recipient": "קופת חולים", "category": "שונות",
                  "subcategory": "", "business_name": ""},
             ],
         }
@@ -201,7 +201,7 @@ class TestBankLookupClassifier(unittest.TestCase):
         classifier = BankLookupClassifier(self.lookup_path)
 
         result = classifier.classify_one(
-            "מכבי", details="לטובת: מכבי עבור: something")
+            "קופת חולים", details="לטובת: קופת חולים עבור: something")
         self.assertEqual(result.category, "בריאות")
 
     def test_missing_lookup_file(self):
@@ -217,14 +217,14 @@ class TestIncomeLookupClassifier(unittest.TestCase):
         self.lookup_path = os.path.join(self.tmpdir, "income_lookup.json")
         data = {
             "exact": [
-                {"action": "מלאנוקס טכנולו", "category": "משכורת",
-                 "comments": "אנבידיה"},
+                {"action": "חברה א", "category": "משכורת",
+                 "comments": "מעסיק"},
                 {"action": "קצבת ילדים", "category": "קצבה",
                  "comments": "קצבת ילדים"},
             ],
             "patterns": [
                 {"prefix": "בטוח לאומי", "category": "מענק",
-                 "comments": "ביטוח לאומי"},
+                 "comments": "גוף ממשלתי"},
             ],
         }
         with open(self.lookup_path, "w", encoding="utf-8") as f:
@@ -232,10 +232,10 @@ class TestIncomeLookupClassifier(unittest.TestCase):
         self.classifier = IncomeLookupClassifier(self.lookup_path)
 
     def test_exact_match(self):
-        result = self.classifier.classify_one("מלאנוקס טכנולו")
+        result = self.classifier.classify_one("חברה א")
         self.assertIsNotNone(result)
         self.assertEqual(result.category, "משכורת")
-        self.assertEqual(result.comments, "אנבידיה")
+        self.assertEqual(result.comments, "מעסיק")
 
     def test_prefix_match(self):
         result = self.classifier.classify_one("בטוח לאומי חד")
@@ -249,7 +249,7 @@ class TestIncomeLookupClassifier(unittest.TestCase):
     def test_classify_dataframe(self):
         df = pd.DataFrame({
             "date": pd.to_datetime(["2026-01-01", "2026-01-20", "2026-01-15"]),
-            "action": ["מלאנוקס טכנולו", "קצבת ילדים", "unknown"],
+            "action": ["חברה א", "קצבת ילדים", "unknown"],
             "details": ["emp123", "", ""],
             "amount": [25000, 115, 500],
             "reference": ["", "", ""],
@@ -258,7 +258,7 @@ class TestIncomeLookupClassifier(unittest.TestCase):
         self.assertEqual(len(result.classified), 2)
         self.assertEqual(len(result.unclassified), 1)
         self.assertEqual(result.classified.iloc[0]["category"], "משכורת")
-        self.assertEqual(result.classified.iloc[0]["comments"], "אנבידיה")
+        self.assertEqual(result.classified.iloc[0]["comments"], "מעסיק")
 
     def test_empty_dataframe(self):
         result = self.classifier.classify(pd.DataFrame())

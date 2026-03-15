@@ -418,6 +418,8 @@ def cmd_process(args):
             parts.append(f"{len(stage.new_expenses)} expenses")
         if stage.new_income:
             parts.append(f"{len(stage.new_income)} income")
+        if stage.bank_balance is not None:
+            parts.append(f"bank balance: {stage.bank_balance:,.2f}")
         if parts:
             print(f"  {stage.month} {stage.year}: {', '.join(parts)}")
 
@@ -469,6 +471,8 @@ def cmd_commit(args):
             parts.append(f"{len(stage.new_expenses)} expenses")
         if stage.new_income:
             parts.append(f"{len(stage.new_income)} income")
+        if stage.bank_balance is not None:
+            parts.append(f"bank balance: {stage.bank_balance:,.2f}")
         if parts:
             print(f"  {stage.month} {stage.year}: {', '.join(parts)}")
 

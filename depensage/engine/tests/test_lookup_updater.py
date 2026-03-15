@@ -47,29 +47,29 @@ class TestApplyLookupUpdates(unittest.TestCase):
     def test_bank_update(self):
         changes = [RowChange(
             month="January", row_type="expense", source="bank",
-            lookup_key="מכבי", old_category="", new_category="בריאות",
-            old_subcategory="", new_subcategory="מכבי",
+            lookup_key="קופת חולים", old_category="", new_category="בריאות",
+            old_subcategory="", new_subcategory="קופת חולים",
         )]
         updated = apply_lookup_updates(
             changes, self.cc_cls, self.bank_cls, self.income_cls
         )
         self.assertIn("bank", updated)
-        result = self.bank_cls.classify_one("מכבי")
+        result = self.bank_cls.classify_one("קופת חולים")
         self.assertIsNotNone(result)
         self.assertEqual(result.category, "בריאות")
-        self.assertEqual(result.subcategory, "מכבי")
+        self.assertEqual(result.subcategory, "קופת חולים")
 
     def test_income_update(self):
         changes = [RowChange(
             month="January", row_type="income", source="income",
-            lookup_key="אנבידיה", old_category="", new_category="משכורת",
-            old_subcategory="", new_subcategory="אנבידיה",
+            lookup_key="מעסיק", old_category="", new_category="משכורת",
+            old_subcategory="", new_subcategory="מעסיק",
         )]
         updated = apply_lookup_updates(
             changes, self.cc_cls, self.bank_cls, self.income_cls
         )
         self.assertIn("income", updated)
-        result = self.income_cls.classify_one("אנבידיה")
+        result = self.income_cls.classify_one("מעסיק")
         self.assertIsNotNone(result)
         self.assertEqual(result.category, "משכורת")
 
@@ -93,7 +93,7 @@ class TestApplyLookupUpdates(unittest.TestCase):
             ),
             RowChange(
                 month="Jan", row_type="expense", source="bank",
-                lookup_key="מכבי", old_category="", new_category="בריאות",
+                lookup_key="קופת חולים", old_category="", new_category="בריאות",
                 old_subcategory="", new_subcategory="",
             ),
         ]

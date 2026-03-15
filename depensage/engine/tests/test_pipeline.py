@@ -353,7 +353,7 @@ class TestPipelineBankTransactions(unittest.TestCase):
     def test_bank_expenses_written(self):
         """Bank expenses are written with BANK status."""
         path = self._bank_excel([
-            ["01/01/2026", "מכבי", "", "123", 300, "", 5000, "", "", ""],
+            ["01/01/2026", "קופת חולים", "", "123", 300, "", 5000, "", "", ""],
         ])
         self._setup_bank_classifier_all()
         self._setup_income_classifier_all()
@@ -384,7 +384,7 @@ class TestPipelineBankTransactions(unittest.TestCase):
     def test_bank_income_written(self):
         """Bank income is written to the income section."""
         path = self._bank_excel([
-            ["01/01/2026", "מלאנוקס טכנולו", "emp123", "456", "", 25000,
+            ["01/01/2026", "חברה א", "emp123", "456", "", 25000,
              30000, "", "", ""],
         ])
         self._setup_bank_classifier_all()
@@ -411,7 +411,7 @@ class TestPipelineBankTransactions(unittest.TestCase):
         path = self._bank_excel([
             ["01/10/2026", "כרטיסי אשראי ל-10", "", "789", 5000, "",
              -5000, "", "", ""],
-            ["01/01/2026", "מכבי", "", "123", 300, "", 5000, "", "", ""],
+            ["01/01/2026", "קופת חולים", "", "123", 300, "", 5000, "", "", ""],
         ])
         self._setup_bank_classifier_all()
         self._setup_income_classifier_all()
@@ -440,7 +440,7 @@ class TestPipelineBankTransactions(unittest.TestCase):
         )
         self.temp_files.append(cc_path)
         bank_path = self._bank_excel([
-            ["01/15/2026", "ביטוח לאומי", "", "123", 400, "", 5000,
+            ["01/15/2026", "תשלום חובה", "", "123", 400, "", 5000,
              "", "", ""],
         ])
 
@@ -475,7 +475,7 @@ class TestPipelineBankTransactions(unittest.TestCase):
     def test_bank_income_dedup(self):
         """Duplicate income transactions are not written again."""
         path = self._bank_excel([
-            ["01/01/2026", "מלאנוקס טכנולו", "emp123", "456", "", 25000,
+            ["01/01/2026", "חברה א", "emp123", "456", "", 25000,
              30000, "", "", ""],
         ])
         self._setup_bank_classifier_all()
@@ -486,7 +486,7 @@ class TestPipelineBankTransactions(unittest.TestCase):
         )
         # Existing income row matches
         self.handler.read_income_rows.return_value = [
-            ["מלאנוקס טכנולו", "25000.00", "משכורת", "01/01/2026"],
+            ["חברה א", "25000.00", "משכורת", "01/01/2026"],
         ]
 
         staged = run_pipeline(
@@ -503,7 +503,7 @@ class TestPipelineBankTransactions(unittest.TestCase):
     def test_no_bank_classifiers_writes_empty_categories(self):
         """Bank transactions without classifiers get empty categories."""
         path = self._bank_excel([
-            ["01/01/2026", "מכבי", "", "123", 300, "", 5000, "", "", ""],
+            ["01/01/2026", "קופת חולים", "", "123", 300, "", 5000, "", "", ""],
         ])
 
         self.handler.find_section_marker.side_effect = (
@@ -519,6 +519,83 @@ class TestPipelineBankTransactions(unittest.TestCase):
         # Should still stage with empty category
         result = staged.commit(self.handler)
         self.assertEqual(result.months[0].written, 1)
+
+    def test_bank_balance_staged(self):
+        """Bank balance from transcript is staged for the correct month."""
+        path = self._bank_excel([
+            ["01/15/2026", "הוראת קבע", "", "111", 500, "", 20000, "", "", ""],
+            ["01/28/2026", "תשלום", "", "222", 700, "", 19300, "", "", ""],
+        ])
+        self._setup_bank_classifier_all()
+        self._setup_income_classifier_all()
+
+        self.handler.sheet_exists.return_value = True
+        self.handler.find_section_marker.side_effect = (
+            lambda sheet, section: 131 if section == "budget" else 160
+        )
+
+        staged = run_pipeline(
+            [path], self.handler, self.classifier, year=2026,
+            bank_classifier=self.bank_classifier,
+            income_classifier=self.income_classifier,
+        )
+
+        stages = staged.sorted_stages()
+        self.assertEqual(len(stages), 1)
+        self.assertAlmostEqual(stages[0].bank_balance, 19300.0)
+
+    def test_bank_balance_committed_via_label_scan(self):
+        """Bank balance commit uses find_reconciliation_label_row."""
+        path = self._bank_excel([
+            ["01/15/2026", "הוראת קבע", "", "111", 500, "", 20000, "", "", ""],
+        ])
+        self._setup_bank_classifier_all()
+        self._setup_income_classifier_all()
+
+        self.handler.sheet_exists.return_value = True
+        self.handler.find_section_marker.side_effect = (
+            lambda sheet, section: 131 if section == "budget" else 160
+        )
+        self.handler.find_reconciliation_label_row.return_value = 175
+        self.handler.update_cell.return_value = True
+
+        staged = run_pipeline(
+            [path], self.handler, self.classifier, year=2026,
+            bank_classifier=self.bank_classifier,
+            income_classifier=self.income_classifier,
+        )
+
+        staged.commit(self.handler)
+        self.handler.find_reconciliation_label_row.assert_called_once_with(
+            "January", 'כסף בעו"ש'
+        )
+        self.handler.update_cell.assert_called_once_with(
+            "January", "E175", 20000.0
+        )
+
+    def test_bank_balance_skipped_when_label_not_found(self):
+        """Bank balance write is skipped if label not found in reconciliation."""
+        path = self._bank_excel([
+            ["01/15/2026", "הוראת קבע", "", "111", 500, "", 20000, "", "", ""],
+        ])
+        self._setup_bank_classifier_all()
+        self._setup_income_classifier_all()
+
+        self.handler.sheet_exists.return_value = True
+        self.handler.find_section_marker.side_effect = (
+            lambda sheet, section: 131 if section == "budget" else 160
+        )
+        self.handler.find_reconciliation_label_row.return_value = None
+        self.handler.update_cell.return_value = True
+
+        staged = run_pipeline(
+            [path], self.handler, self.classifier, year=2026,
+            bank_classifier=self.bank_classifier,
+            income_classifier=self.income_classifier,
+        )
+
+        staged.commit(self.handler)
+        self.handler.update_cell.assert_not_called()
 
 
 if __name__ == "__main__":

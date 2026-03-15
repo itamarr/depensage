@@ -51,6 +51,7 @@ class MonthStage:
     income_insert_needed: int = 0
     duplicates: int = 0
     income_duplicates: int = 0
+    bank_balance: float | None = None  # closing bank balance for E175
 
 
 def _month_order(month_name):
@@ -111,6 +112,8 @@ class StagedPipelineResult:
                 parts.append(f"{len(stage.new_income)} income")
             if stage.income_duplicates:
                 parts.append(f"{stage.income_duplicates} income dupes")
+            if stage.bank_balance is not None:
+                parts.append(f"bank balance: {stage.bank_balance:,.2f}")
             if parts:
                 lines.append(f"  {stage.month} {stage.year}: {', '.join(parts)}")
 
@@ -138,6 +141,7 @@ class StagedPipelineResult:
         """Return True if there are any staged writes."""
         return any(
             stage.new_expenses or stage.new_income
+            or stage.bank_balance is not None
             for stage in self.month_stages.values()
         )
 
@@ -168,7 +172,7 @@ class StagedPipelineResult:
         summary_ws.sheet_view.rightToLeft = True
 
         bold = Font(bold=True)
-        summary_ws.append(["חודש", "הוצאות חדשות", "כפילויות", "הכנסות חדשות", "כפילויות הכנסות"])
+        summary_ws.append(["חודש", "הוצאות חדשות", "כפילויות", "הכנסות חדשות", "כפילויות הכנסות", 'יתרה בעו"ש'])
         for cell in summary_ws[1]:
             cell.font = bold
 
@@ -179,6 +183,7 @@ class StagedPipelineResult:
                 stage.duplicates,
                 len(stage.new_income),
                 stage.income_duplicates,
+                stage.bank_balance if stage.bank_balance is not None else "",
             ])
 
         # Add unclassified merchants to summary
@@ -195,8 +200,11 @@ class StagedPipelineResult:
 
         red_fill = PatternFill(start_color="FFCCCC", end_color="FFCCCC", fill_type="solid")
 
+        bank_balance_label = 'יתרה בעו"ש'
+
         for stage in self.sorted_stages():
-            if not stage.new_expenses and not stage.new_income:
+            if (not stage.new_expenses and not stage.new_income
+                    and stage.bank_balance is None):
                 continue
 
             ws_name = f"{stage.month[:3]} {stage.year}"
@@ -229,6 +237,13 @@ class StagedPipelineResult:
                     cell.font = bold
                 for row in stage.new_income:
                     ws.append(row)
+
+            if stage.bank_balance is not None:
+                if stage.new_expenses or stage.new_income:
+                    ws.append([])  # blank separator
+                ws.append([bank_balance_label, stage.bank_balance])
+                bal_row = ws.max_row
+                ws.cell(row=bal_row, column=1).font = bold
 
         # Add hidden metadata sheet for edit-back flow
         meta_ws = wb.create_sheet(title="_row_meta")
@@ -298,6 +313,26 @@ class StagedPipelineResult:
                     stage.month, stage.income_start_row, stage.new_income
                 )
                 income_written = len(stage.new_income)
+
+            # Write bank balance to the reconciliation section
+            if stage.bank_balance is not None:
+                bal_row = handler.find_reconciliation_label_row(
+                    stage.month, 'כסף בעו"ש'
+                )
+                if bal_row:
+                    handler.update_cell(
+                        stage.month, f"E{bal_row}", stage.bank_balance
+                    )
+                    logger.info(
+                        f"Wrote bank balance {stage.bank_balance:,.2f} "
+                        f"to {stage.month}!E{bal_row}"
+                    )
+                else:
+                    logger.warning(
+                        f"Could not find 'כסף בעו\"ש' label in "
+                        f"{stage.month} reconciliation section, "
+                        f"skipping bank balance write"
+                    )
 
             month_results.append(MonthResult(
                 month=stage.month,
@@ -416,6 +451,18 @@ def import_staged_xlsx(path):
                     row.append("")
                 stage.new_income.append([_cell_str(v) for v in row])
                 i += 1
+
+        # Skip blank rows and look for bank balance label
+        while i < len(rows) and (not rows[i] or rows[i][0] is None):
+            i += 1
+        bank_balance_label = 'יתרה בעו"ש'
+        if i < len(rows) and rows[i] and rows[i][0] == bank_balance_label:
+            bal_val = rows[i][1]
+            if bal_val is not None:
+                try:
+                    stage.bank_balance = float(bal_val)
+                except (ValueError, TypeError):
+                    pass
 
         stages[ws_name] = stage
 

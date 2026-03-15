@@ -29,6 +29,7 @@ _COL_DETAILS = "פרטים"
 _COL_REFERENCE = "אסמכתא"
 _COL_DEBIT = "חובה"
 _COL_CREDIT = "זכות"
+_COL_BALANCE = "יתרה בש''ח"
 _COL_BENEFICIARY = "לטובת"
 _COL_PURPOSE = "עבור"
 
@@ -46,6 +47,7 @@ class BankParseResult:
     expenses: pd.DataFrame  # Debits (non-CC), cols: date, action, details, amount, reference
     income: pd.DataFrame    # Credits, cols: date, action, details, amount, reference
     cc_lump_sums: List[CCLumpSum] = field(default_factory=list)
+    monthly_balances: dict = field(default_factory=dict)  # (year, month) -> closing balance
 
 
 def detect_bank_transcript(file_path):
@@ -111,6 +113,7 @@ def parse_bank_transcript(file_path):
 
         # Optional columns
         for target, keyword in [
+            ("balance", _COL_BALANCE),
             ("beneficiary", _COL_BENEFICIARY),
             ("purpose", _COL_PURPOSE),
         ]:
@@ -142,6 +145,15 @@ def parse_bank_transcript(file_path):
             df.iloc[:, col_map["credit"]].astype(str).str.replace(",", ""),
             errors="coerce",
         )
+
+        # Balance column (optional)
+        if col_map.get("balance") is not None:
+            result["balance"] = pd.to_numeric(
+                df.iloc[:, col_map["balance"]].astype(str).str.replace(",", ""),
+                errors="coerce",
+            )
+        else:
+            result["balance"] = float("nan")
 
         # Drop rows without a valid date (footer/summary rows)
         result = result.dropna(subset=["date"])
@@ -177,9 +189,13 @@ def parse_bank_transcript(file_path):
         else:
             income = empty_df.copy()
 
+        # Extract last balance per month (closing balance for the month)
+        monthly_balances = _extract_monthly_balances(result)
+
         logger.info(
             f"Parsed bank transcript: {len(expenses)} expenses, "
-            f"{len(income)} income, {len(cc_lump_sums)} CC charges "
+            f"{len(income)} income, {len(cc_lump_sums)} CC charges, "
+            f"{len(monthly_balances)} monthly balances "
             f"from {file_path}"
         )
 
@@ -187,11 +203,39 @@ def parse_bank_transcript(file_path):
             expenses=expenses,
             income=income,
             cc_lump_sums=cc_lump_sums,
+            monthly_balances=monthly_balances,
         )
 
     except Exception as e:
         logger.error(f"Failed to parse bank transcript '{file_path}': {e}")
         return None
+
+
+def _extract_monthly_balances(df):
+    """Extract the last balance per (year, month) from parsed transactions.
+
+    Uses the balance on the latest transaction date within each month.
+
+    Args:
+        df: DataFrame with 'date' and 'balance' columns.
+
+    Returns:
+        Dict mapping (year, month) to closing balance float.
+    """
+    if "balance" not in df.columns:
+        return {}
+
+    valid = df[df["balance"].notna() & df["date"].notna()].copy()
+    if valid.empty:
+        return {}
+
+    # Group by year-month, take balance from latest date in each group
+    valid["_ym"] = valid["date"].dt.to_period("M")
+    balances = {}
+    for period, group in valid.groupby("_ym"):
+        latest = group.loc[group["date"].idxmax()]
+        balances[(period.year, period.month)] = float(latest["balance"])
+    return balances
 
 
 def _find_column(headers, keyword):

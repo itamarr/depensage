@@ -97,6 +97,7 @@ def run_pipeline(statement_paths, handlers, classifier, year=None,
     bank_expenses = []
     bank_income = []
     all_cc_lump_sums = []
+    all_monthly_balances = {}  # (year, month) -> balance
 
     for path in statement_paths:
         if detect_bank_transcript(path):
@@ -107,6 +108,8 @@ def run_pipeline(statement_paths, handlers, classifier, year=None,
                 if not bank_result.income.empty:
                     bank_income.append(bank_result.income)
                 all_cc_lump_sums.extend(bank_result.cc_lump_sums)
+                # Merge monthly balances (later file wins on conflict)
+                all_monthly_balances.update(bank_result.monthly_balances)
         else:
             df = parser.parse_statement(path)
             if df is not None and not df.empty:
@@ -310,6 +313,34 @@ def run_pipeline(statement_paths, handlers, classifier, year=None,
             stage.new_income.extend(formatted)
             stage.income_start_row = first_empty
             stage.income_insert_needed += insert_needed
+
+    # 6. Stage bank balances
+    for (bal_year, bal_month), balance in all_monthly_balances.items():
+        if year is not None and bal_year != year:
+            continue
+        month_names = {
+            1: "January", 2: "February", 3: "March", 4: "April",
+            5: "May", 6: "June", 7: "July", 8: "August",
+            9: "September", 10: "October", 11: "November", 12: "December",
+        }
+        sheet_name = month_names.get(bal_month)
+        if not sheet_name:
+            continue
+        try:
+            handler = get_handler(bal_year)
+        except ValueError:
+            logger.info(f"No handler for year {bal_year}, skipping bank balance")
+            continue
+        if not handler.sheet_exists(sheet_name):
+            logger.info(
+                f"Sheet '{sheet_name}' does not exist, skipping bank balance"
+            )
+            continue
+        stage = staged.get_or_create_stage(sheet_name, bal_year)
+        stage.bank_balance = balance
+        logger.info(
+            f"Staged bank balance {balance:,.2f} for {sheet_name} {bal_year}"
+        )
 
     return staged
 

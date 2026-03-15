@@ -18,19 +18,19 @@ class TestExportImportRoundTrip(unittest.TestCase):
         stage = staged.get_or_create_stage("February", 2026)
         stage.new_expenses = [
             ["Shop A", "", "", "100.50", "סופר", "02/01/2026", "CC"],
-            ["מכבי", "", "מכבי", "300.00", "בריאות", "02/05/2026", "BANK"],
+            ["קופת חולים", "", "קופת חולים", "300.00", "בריאות", "02/05/2026", "BANK"],
             ["Unknown", "", "", "50.00", "", "02/10/2026", "CC"],
         ]
         stage.expense_meta = [
             RowMeta(orig_category="סופר", orig_subcategory=""),
-            RowMeta(orig_category="בריאות", orig_subcategory="מכבי"),
+            RowMeta(orig_category="בריאות", orig_subcategory="קופת חולים"),
             RowMeta(orig_category="", orig_subcategory="", needs_review=True),
         ]
         stage.new_income = [
-            ["אנבידיה", "25000.00", "משכורת", "02/01/2026"],
+            ["מעסיק", "25000.00", "משכורת", "02/01/2026"],
         ]
         stage.income_meta = [
-            RowMeta(orig_category="משכורת", orig_subcategory="אנבידיה"),
+            RowMeta(orig_category="משכורת", orig_subcategory="מעסיק"),
         ]
         return staged
 
@@ -87,7 +87,7 @@ class TestExportImportRoundTrip(unittest.TestCase):
         self.assertEqual(len(changes), 1)
         c = changes[0]
         self.assertEqual(c.source, "bank")
-        self.assertEqual(c.lookup_key, "מכבי")
+        self.assertEqual(c.lookup_key, "קופת חולים")
         self.assertEqual(c.old_category, "בריאות")
         self.assertEqual(c.new_category, "חשבונות")
 
@@ -121,6 +121,60 @@ class TestExportImportRoundTrip(unittest.TestCase):
         with self.assertRaises(ValueError) as ctx:
             import_staged_xlsx(path)
         self.assertIn("_row_meta", str(ctx.exception))
+
+
+    def test_bank_balance_round_trip(self):
+        """Bank balance survives export → import round-trip."""
+        staged = self._make_staged_with_meta()
+        stage = staged.month_stages[("February", 2026)]
+        stage.bank_balance = 12345.67
+
+        path = os.path.join(tempfile.mkdtemp(), "test.xlsx")
+        staged.export_xlsx(path)
+
+        # Verify it's in the XLSX
+        import openpyxl
+        wb = openpyxl.load_workbook(path)
+        ws = wb["Feb 2026"]
+        # Find the balance label row
+        found = False
+        for row in ws.iter_rows(values_only=True):
+            if row[0] == 'יתרה בעו"ש':
+                self.assertAlmostEqual(row[1], 12345.67)
+                found = True
+                break
+        self.assertTrue(found, "Bank balance label not found in XLSX")
+
+        # Import and check
+        stages, changes = import_staged_xlsx(path)
+        self.assertAlmostEqual(stages["Feb 2026"].bank_balance, 12345.67)
+
+    def test_bank_balance_only_stage(self):
+        """A month with only bank balance (no expenses/income) is exported."""
+        staged = StagedPipelineResult()
+        stage = staged.get_or_create_stage("March", 2026)
+        stage.bank_balance = 5000.00
+
+        path = os.path.join(tempfile.mkdtemp(), "test.xlsx")
+        staged.export_xlsx(path)
+
+        import openpyxl
+        wb = openpyxl.load_workbook(path)
+        self.assertIn("Mar 2026", wb.sheetnames)
+
+        stages, changes = import_staged_xlsx(path)
+        self.assertAlmostEqual(stages["Mar 2026"].bank_balance, 5000.00)
+        self.assertEqual(len(stages["Mar 2026"].new_expenses), 0)
+        self.assertEqual(len(stages["Mar 2026"].new_income), 0)
+
+    def test_no_bank_balance_stays_none(self):
+        """Months without bank balance keep bank_balance as None."""
+        staged = self._make_staged_with_meta()
+        path = os.path.join(tempfile.mkdtemp(), "test.xlsx")
+        staged.export_xlsx(path)
+
+        stages, changes = import_staged_xlsx(path)
+        self.assertIsNone(stages["Feb 2026"].bank_balance)
 
 
 class TestExportHighlighting(unittest.TestCase):
