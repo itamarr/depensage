@@ -263,5 +263,101 @@ class TestRowMetaInMonthStage(unittest.TestCase):
         self.assertEqual(rows[0][4], "sub")
 
 
+class TestSavingsRoundTrip(unittest.TestCase):
+    """Test savings allocation export → import round-trip."""
+
+    def _make_staged_with_savings(self):
+        from depensage.engine.savings_allocator import SavingsAllocation
+        staged = StagedPipelineResult()
+        stage = staged.get_or_create_stage("February", 2026)
+        stage.savings_allocations = [
+            SavingsAllocation(goal_name="רכב", allocated=2000, row_number=60,
+                              is_default=False, is_blatam=False),
+            SavingsAllocation(goal_name="דירה", allocated=3500, row_number=61,
+                              is_default=True, is_blatam=False),
+            SavingsAllocation(goal_name='בלת"ם', allocated=800, row_number=62,
+                              is_default=False, is_blatam=True),
+        ]
+        return staged
+
+    def test_savings_round_trip(self):
+        """Export/import preserves savings allocations."""
+        staged = self._make_staged_with_savings()
+        path = os.path.join(tempfile.mkdtemp(), "test.xlsx")
+        staged.export_xlsx(path)
+
+        stages, changes = import_staged_xlsx(path)
+        self.assertIn("Feb 2026", stages)
+        stage = stages["Feb 2026"]
+        self.assertEqual(len(stage.savings_allocations), 3)
+        alloc_map = {a.goal_name: a for a in stage.savings_allocations}
+        self.assertEqual(alloc_map["רכב"].allocated, 2000)
+        self.assertEqual(alloc_map["דירה"].allocated, 3500)
+        self.assertTrue(alloc_map["דירה"].is_default)
+        self.assertEqual(alloc_map['בלת"ם'].allocated, 800)
+        self.assertTrue(alloc_map['בלת"ם'].is_blatam)
+        # Row numbers preserved from metadata
+        self.assertEqual(alloc_map["רכב"].row_number, 60)
+
+    def test_savings_user_edit(self):
+        """Modified allocation value survives import."""
+        staged = self._make_staged_with_savings()
+        path = os.path.join(tempfile.mkdtemp(), "test.xlsx")
+        staged.export_xlsx(path)
+
+        # Edit: change דירה allocation from 3500 to 4000
+        import openpyxl
+        wb = openpyxl.load_workbook(path)
+        ws = wb["Feb 2026"]
+        # Find the allocation row for דירה
+        for row_idx in range(1, ws.max_row + 1):
+            cell_val = ws.cell(row=row_idx, column=1).value
+            if cell_val and "דירה" in str(cell_val):
+                ws.cell(row=row_idx, column=3).value = 4000
+                break
+        wb.save(path)
+
+        stages, changes = import_staged_xlsx(path)
+        stage = stages["Feb 2026"]
+        alloc_map = {a.goal_name: a for a in stage.savings_allocations}
+        self.assertEqual(alloc_map["דירה"].allocated, 4000)
+
+    def test_savings_warning_in_xlsx(self):
+        """Warning row appears in XLSX for tight month."""
+        from depensage.engine.savings_allocator import SavingsAllocation
+        staged = StagedPipelineResult()
+        stage = staged.get_or_create_stage("March", 2026)
+        stage.savings_allocations = [
+            SavingsAllocation(goal_name="רכב", allocated=2000, row_number=60,
+                              is_default=False, is_blatam=False),
+        ]
+        stage.savings_warning = "תקציב חסכון נמוך"
+
+        path = os.path.join(tempfile.mkdtemp(), "test.xlsx")
+        staged.export_xlsx(path)
+
+        import openpyxl
+        wb = openpyxl.load_workbook(path)
+        ws = wb["Mar 2026"]
+        # Find warning text in the sheet
+        found_warning = False
+        for row in ws.iter_rows(values_only=True):
+            if row[0] and "תקציב חסכון נמוך" in str(row[0]):
+                found_warning = True
+                break
+        self.assertTrue(found_warning, "Warning text not found in XLSX")
+
+    def test_has_writes_with_only_savings(self):
+        """has_writes() returns True when only savings allocations exist."""
+        from depensage.engine.savings_allocator import SavingsAllocation
+        staged = StagedPipelineResult()
+        stage = staged.get_or_create_stage("January", 2026)
+        stage.savings_allocations = [
+            SavingsAllocation(goal_name="רכב", allocated=1000, row_number=50,
+                              is_default=False, is_blatam=False),
+        ]
+        self.assertTrue(staged.has_writes())
+
+
 if __name__ == "__main__":
     unittest.main()

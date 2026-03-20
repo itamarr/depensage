@@ -420,8 +420,12 @@ def cmd_process(args):
             parts.append(f"{len(stage.new_income)} income")
         if stage.bank_balance is not None:
             parts.append(f"bank balance: {stage.bank_balance:,.2f}")
+        if stage.savings_allocations:
+            parts.append(f"{len(stage.savings_allocations)} savings")
         if parts:
             print(f"  {stage.month} {stage.year}: {', '.join(parts)}")
+        if stage.savings_warning:
+            print(f"    Warning: {stage.savings_warning}")
 
     # Lookup review
     if edit_choice == "r" and changes:
@@ -473,8 +477,12 @@ def cmd_commit(args):
             parts.append(f"{len(stage.new_income)} income")
         if stage.bank_balance is not None:
             parts.append(f"bank balance: {stage.bank_balance:,.2f}")
+        if stage.savings_allocations:
+            parts.append(f"{len(stage.savings_allocations)} savings")
         if parts:
             print(f"  {stage.month} {stage.year}: {', '.join(parts)}")
+        if stage.savings_warning:
+            print(f"    Warning: {stage.savings_warning}")
 
     if not staged.has_writes():
         print("\nNothing to write.")

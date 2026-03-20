@@ -44,7 +44,8 @@ def load_settings(config_file=None, force_reload=False):
     Config format:
         {
             "spreadsheets": {"2025": "spreadsheet_id_1", "2026": "spreadsheet_id_2"},
-            "credentials_file": ".secrets/credentials.json"
+            "credentials_file": ".secrets/credentials.json",
+            "default_savings_goal": "דירה"  // optional
         }
 
     Args:

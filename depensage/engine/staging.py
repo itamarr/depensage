@@ -52,6 +52,8 @@ class MonthStage:
     duplicates: int = 0
     income_duplicates: int = 0
     bank_balance: float | None = None  # closing bank balance for E175
+    savings_allocations: list = field(default_factory=list)  # SavingsAllocation list
+    savings_warning: str | None = None
 
 
 def _month_order(month_name):
@@ -114,8 +116,12 @@ class StagedPipelineResult:
                 parts.append(f"{stage.income_duplicates} income dupes")
             if stage.bank_balance is not None:
                 parts.append(f"bank balance: {stage.bank_balance:,.2f}")
+            if stage.savings_allocations:
+                parts.append(f"{len(stage.savings_allocations)} savings allocations")
             if parts:
                 lines.append(f"  {stage.month} {stage.year}: {', '.join(parts)}")
+            if stage.savings_warning:
+                lines.append(f"    ⚠ {stage.savings_warning}")
 
         if self.unclassified_merchants:
             lines.append(f"\n  Unclassified merchants ({len(self.unclassified_merchants)}):")
@@ -142,6 +148,7 @@ class StagedPipelineResult:
         return any(
             stage.new_expenses or stage.new_income
             or stage.bank_balance is not None
+            or stage.savings_allocations
             for stage in self.month_stages.values()
         )
 
@@ -201,10 +208,13 @@ class StagedPipelineResult:
         red_fill = PatternFill(start_color="FFCCCC", end_color="FFCCCC", fill_type="solid")
 
         bank_balance_label = 'יתרה בעו"ש'
+        yellow_fill = PatternFill(start_color="FFFF99", end_color="FFFF99", fill_type="solid")
+        red_warning_fill = PatternFill(start_color="FF9999", end_color="FF9999", fill_type="solid")
 
         for stage in self.sorted_stages():
             if (not stage.new_expenses and not stage.new_income
-                    and stage.bank_balance is None):
+                    and stage.bank_balance is None
+                    and not stage.savings_allocations):
                 continue
 
             ws_name = f"{stage.month[:3]} {stage.year}"
@@ -245,6 +255,35 @@ class StagedPipelineResult:
                 bal_row = ws.max_row
                 ws.cell(row=bal_row, column=1).font = bold
 
+            if stage.savings_allocations:
+                ws.append([])  # blank separator
+                ws.append(["הקצאת חסכון"])
+                ws.cell(row=ws.max_row, column=1).font = bold
+                ws.append(["קטגוריה", "תקציב", "הקצאה"])
+                for cell in ws[ws.max_row]:
+                    if cell.value:
+                        cell.font = bold
+
+                for alloc in stage.savings_allocations:
+                    preset = ""
+                    # Find preset from the _row_meta savings entries
+                    for sa in stage.savings_allocations:
+                        if sa.goal_name == alloc.goal_name:
+                            break
+                    label = alloc.goal_name
+                    if alloc.is_default:
+                        label += " (ברירת מחדל)"
+                    ws.append([label, "", alloc.allocated])
+
+                if stage.savings_warning:
+                    ws.append([])
+                    ws.append([stage.savings_warning])
+                    warn_row = ws.max_row
+                    warn_fill = red_warning_fill if any(
+                        a.allocated == 0 for a in stage.savings_allocations
+                    ) else yellow_fill
+                    ws.cell(row=warn_row, column=1).fill = warn_fill
+
         # Add hidden metadata sheet for edit-back flow
         meta_ws = wb.create_sheet(title="_row_meta")
         meta_ws.sheet_state = "hidden"
@@ -255,6 +294,8 @@ class StagedPipelineResult:
                 meta_ws.append([ws_name, "expense", i, meta.orig_category, meta.orig_subcategory])
             for i, meta in enumerate(stage.income_meta):
                 meta_ws.append([ws_name, "income", i, meta.orig_category, meta.orig_subcategory])
+            for i, alloc in enumerate(stage.savings_allocations):
+                meta_ws.append([ws_name, "savings", i, alloc.goal_name, alloc.row_number])
 
         wb.save(path)
         return path
@@ -313,6 +354,22 @@ class StagedPipelineResult:
                     stage.month, stage.income_start_row, stage.new_income
                 )
                 income_written = len(stage.new_income)
+
+            # Write savings allocations to column E
+            if stage.savings_allocations:
+                from depensage.engine.savings_allocator import find_savings_goal_rows
+                # Re-scan for fresh row numbers (inserts may have shifted rows)
+                fresh_rows = find_savings_goal_rows(handler, stage.month)
+                for alloc in stage.savings_allocations:
+                    row_num = fresh_rows.get(alloc.goal_name, alloc.row_number)
+                    if row_num:
+                        handler.update_cell(
+                            stage.month, f"E{row_num}", alloc.allocated
+                        )
+                        logger.info(
+                            f"Wrote savings allocation {alloc.allocated:,.2f} "
+                            f"for {alloc.goal_name} to {stage.month}!E{row_num}"
+                        )
 
             # Write bank balance to the reconciliation section
             if stage.bank_balance is not None:
@@ -381,14 +438,20 @@ def import_staged_xlsx(path):
     meta_rows = list(meta_ws.iter_rows(min_row=2, values_only=True))
     # Group by (month, row_type)
     meta_by_key = {}
+    savings_meta_by_month = {}  # {ws_name: [(goal_name, row_number), ...]}
     for row in meta_rows:
         month, row_type, row_index, orig_cat, orig_sub = row
-        meta_by_key.setdefault((month, row_type), []).append(
-            RowMeta(
-                orig_category=_cell_str(orig_cat),
-                orig_subcategory=_cell_str(orig_sub),
+        if row_type == "savings":
+            savings_meta_by_month.setdefault(month, []).append(
+                (_cell_str(orig_cat), orig_sub)  # goal_name, row_number
             )
-        )
+        else:
+            meta_by_key.setdefault((month, row_type), []).append(
+                RowMeta(
+                    orig_category=_cell_str(orig_cat),
+                    orig_subcategory=_cell_str(orig_sub),
+                )
+            )
 
     stages = {}
     changes = []
@@ -463,6 +526,55 @@ def import_staged_xlsx(path):
                     stage.bank_balance = float(bal_val)
                 except (ValueError, TypeError):
                     pass
+            i += 1
+
+        # Skip blank rows and look for savings allocation header
+        while i < len(rows) and (not rows[i] or rows[i][0] is None):
+            i += 1
+        savings_header_label = "הקצאת חסכון"
+        if i < len(rows) and rows[i] and rows[i][0] == savings_header_label:
+            i += 1  # skip header
+            # Skip column headers row
+            if i < len(rows) and rows[i] and rows[i][0] == "קטגוריה":
+                i += 1
+            # Read allocation rows
+            savings_meta = savings_meta_by_month.get(ws_name, [])
+            alloc_idx = 0
+            from depensage.engine.savings_allocator import SavingsAllocation
+            while i < len(rows) and rows[i] and rows[i][0] is not None:
+                # Stop at warning row (no numeric allocation column)
+                cell_val = rows[i][0]
+                if isinstance(cell_val, str) and (
+                    cell_val.startswith("תקציב") or not rows[i][2]
+                ):
+                    # Could be a warning row — check if col 2 (allocation) is empty
+                    if rows[i][2] is None:
+                        break
+                goal_label = str(rows[i][0]).strip()
+                # Strip "(ברירת מחדל)" suffix
+                is_default = "(ברירת מחדל)" in goal_label
+                goal_name = goal_label.replace(" (ברירת מחדל)", "").strip()
+                try:
+                    allocated = float(rows[i][2]) if rows[i][2] is not None else 0.0
+                except (ValueError, TypeError):
+                    allocated = 0.0
+                # Get row_number from metadata
+                row_number = 0
+                if alloc_idx < len(savings_meta):
+                    _, row_number = savings_meta[alloc_idx]
+                    if row_number is not None:
+                        row_number = int(row_number)
+                    else:
+                        row_number = 0
+                stage.savings_allocations.append(SavingsAllocation(
+                    goal_name=goal_name,
+                    allocated=allocated,
+                    row_number=row_number,
+                    is_default=is_default,
+                    is_blatam=('בלת"ם' in goal_name),
+                ))
+                alloc_idx += 1
+                i += 1
 
         stages[ws_name] = stage
 

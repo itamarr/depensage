@@ -314,7 +314,8 @@ def run_pipeline(statement_paths, handlers, classifier, year=None,
             stage.income_start_row = first_empty
             stage.income_insert_needed += insert_needed
 
-    # 6. Stage bank balances
+    # 6. Stage bank balances (continued below after savings)
+
     for (bal_year, bal_month), balance in all_monthly_balances.items():
         if year is not None and bal_year != year:
             continue
@@ -340,6 +341,43 @@ def run_pipeline(statement_paths, handlers, classifier, year=None,
         stage.bank_balance = balance
         logger.info(
             f"Staged bank balance {balance:,.2f} for {sheet_name} {bal_year}"
+        )
+
+    # 7. Stage savings allocations
+    from depensage.engine.savings_allocator import (
+        read_savings_budget, read_savings_goals, allocate_savings,
+    )
+    from depensage.config.settings import load_settings
+    try:
+        settings = load_settings()
+        default_goal = settings.get("default_savings_goal")
+    except Exception:
+        default_goal = None
+
+    for key in list(staged.month_stages.keys()):
+        sheet_name, tx_year = key
+        handler = get_handler(tx_year)
+        try:
+            budget = read_savings_budget(handler, sheet_name)
+        except Exception:
+            logger.debug(f"Could not read savings budget for {sheet_name}, skipping")
+            continue
+        if budget is None:
+            continue
+        try:
+            goals = read_savings_goals(handler, sheet_name)
+        except Exception:
+            logger.debug(f"Could not read savings goals for {sheet_name}, skipping")
+            continue
+        if not goals:
+            continue
+        result = allocate_savings(budget, goals, default_goal)
+        stage = staged.month_stages[key]
+        stage.savings_allocations = result.allocations
+        stage.savings_warning = result.warning
+        logger.info(
+            f"Savings allocation for {sheet_name}: budget={budget:,.2f}, "
+            f"presets={result.total_preset:,.2f}, surplus={result.surplus:,.2f}"
         )
 
     return staged
