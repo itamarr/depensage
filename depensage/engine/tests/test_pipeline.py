@@ -481,6 +481,7 @@ class TestPipelineBankTransactions(unittest.TestCase):
         self._setup_bank_classifier_all()
         self._setup_income_classifier_all()
 
+        self.handler.sheet_exists.return_value = True
         self.handler.find_section_marker.side_effect = (
             lambda sheet, section: 131 if section == "budget" else 160
         )

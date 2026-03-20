@@ -3,9 +3,9 @@ Savings section auto-allocation.
 
 Reads the savings budget and template-preset incoming values,
 then computes allocations based on three cases:
-- Good month: budget >= presets → keep presets, adjust בלת"ם, surplus → default goal
-- Tight month: 0 < budget < presets → keep presets, warn user
-- Bad month: budget <= 0 → zero all, warn user
+- Good month: budget >= presets -> keep presets, adjust blatam, surplus -> default goal
+- Tight month: 0 < budget < presets -> keep presets, warn user
+- Bad month: budget <= 0 -> zero all, warn user
 """
 
 import logging
@@ -35,7 +35,11 @@ class SavingsAllocation:
     allocated: float        # what to write to column E
     row_number: int
     is_default: bool        # True for the surplus-absorbing goal
-    is_blatam: bool         # True for בלת"ם goal
+    is_blatam: bool         # True for blatam goal
+    # Context fields for XLSX display
+    preset_incoming: float = 0.0
+    target: float = 0.0
+    current_total: float = 0.0
 
 
 @dataclass
@@ -104,7 +108,7 @@ def read_savings_goals(handler, sheet_name):
 
 
 def read_savings_budget(handler, sheet_name):
-    """Read the חסכון budget line's D (budget) value.
+    """Read the savings budget line's D (budget) value.
 
     Returns float or None if not found.
     """
@@ -130,30 +134,51 @@ def read_savings_budget(handler, sheet_name):
     return None
 
 
+def _make_allocation(g, allocated, default_goal_name, default_goal):
+    """Create a SavingsAllocation with context fields from a SavingsGoal."""
+    is_default = (default_goal is not None and g.goal_name == default_goal.goal_name)
+    return SavingsAllocation(
+        goal_name=g.goal_name,
+        allocated=allocated,
+        row_number=g.row_number,
+        is_default=is_default,
+        is_blatam=(g.goal_name == BLATAM_GOAL_NAME),
+        preset_incoming=g.preset_incoming,
+        target=g.target,
+        current_total=g.total,
+    )
+
+
 def allocate_savings(budget, goals, default_goal_name=None):
     """Compute savings allocations (pure function).
 
     Args:
-        budget: Savings budget amount (from חסכון budget line).
+        budget: Savings budget amount (from savings budget line).
         goals: List of SavingsGoal from the savings section.
         default_goal_name: Name of goal that absorbs surplus. Falls back
-            to first non-בלת"ם goal if not found.
+            to first non-blatam goal if not found.
 
     Returns:
         SavingsAllocationResult with computed allocations.
     """
     total_preset = sum(g.preset_incoming for g in goals)
 
+    # Find default goal (needed for all cases)
+    default_goal = None
+    for g in goals:
+        if g.goal_name == default_goal_name:
+            default_goal = g
+            break
+    if default_goal is None:
+        for g in goals:
+            if g.goal_name != BLATAM_GOAL_NAME:
+                default_goal = g
+                break
+
     # Case 3: Bad month — budget <= 0
     if budget <= 0:
         allocations = [
-            SavingsAllocation(
-                goal_name=g.goal_name,
-                allocated=0.0,
-                row_number=g.row_number,
-                is_default=(g.goal_name == default_goal_name),
-                is_blatam=(g.goal_name == BLATAM_GOAL_NAME),
-            )
+            _make_allocation(g, 0.0, default_goal_name, default_goal)
             for g in goals
         ]
         return SavingsAllocationResult(
@@ -162,8 +187,8 @@ def allocate_savings(budget, goals, default_goal_name=None):
             total_preset=total_preset,
             surplus=budget - total_preset,
             warning=(
-                f"תקציב חסכון שלילי ({budget:,.0f}). "
-                f"כל ההקצאות אופסו. מומלץ לפדות חסכונות לכיסוי הגירעון."
+                f"Negative savings budget ({budget:,.0f}). "
+                f"All allocations zeroed. Consider liquidating savings to cover the deficit."
             ),
             zero_out=True,
         )
@@ -171,13 +196,7 @@ def allocate_savings(budget, goals, default_goal_name=None):
     # Case 2: Tight month — 0 < budget < total_preset
     if budget < total_preset:
         allocations = [
-            SavingsAllocation(
-                goal_name=g.goal_name,
-                allocated=g.preset_incoming,
-                row_number=g.row_number,
-                is_default=(g.goal_name == default_goal_name),
-                is_blatam=(g.goal_name == BLATAM_GOAL_NAME),
-            )
+            _make_allocation(g, g.preset_incoming, default_goal_name, default_goal)
             for g in goals
         ]
         return SavingsAllocationResult(
@@ -186,8 +205,8 @@ def allocate_savings(budget, goals, default_goal_name=None):
             total_preset=total_preset,
             surplus=budget - total_preset,
             warning=(
-                f"תקציב חסכון ({budget:,.0f}) נמוך מסה\"כ מתוכנן ({total_preset:,.0f}). "
-                f"יש לקצץ ידנית."
+                f"Savings budget ({budget:,.0f}) is less than total planned "
+                f"({total_preset:,.0f}). Adjust allocations manually."
             ),
             zero_out=False,
         )
@@ -195,36 +214,16 @@ def allocate_savings(budget, goals, default_goal_name=None):
     # Case 1: Good month — budget >= total_preset
     remaining = budget - total_preset
 
-    # Find default goal
-    default_goal = None
-    for g in goals:
-        if g.goal_name == default_goal_name:
-            default_goal = g
-            break
-    if default_goal is None:
-        # Fallback: first non-בלת"ם goal
-        for g in goals:
-            if g.goal_name != BLATAM_GOAL_NAME:
-                default_goal = g
-                break
-
     allocations = []
     for g in goals:
         allocated = g.preset_incoming
-        is_default = (default_goal is not None and g.goal_name == default_goal.goal_name)
         is_blatam = (g.goal_name == BLATAM_GOAL_NAME)
 
-        # Adjust בלת"ם: if outgoing > 0, increase incoming to maintain target
+        # Adjust blatam: if outgoing > 0, increase incoming to maintain target
         if is_blatam and g.outgoing > 0:
-            # Total formula: C = F(accumulated) + E(incoming) - D(outgoing)
-            # We want C to stay at B (target).
-            # So E = B - F + D = target - (total - incoming + outgoing) + outgoing
-            # Simpler: the deficit is target - (total - incoming + outgoing)
-            # incoming_needed = target - total + outgoing + incoming... no.
-            # Actually: C = F + E - D where F = accumulated (carryover)
-            # We want C = B (target). Current C = total.
+            # C = F + E - D. We want C = B (target).
             # If we change E to new_E: new_C = total - preset_incoming + new_E
-            # We want new_C = target → new_E = target - total + preset_incoming
+            # We want new_C = target -> new_E = target - total + preset_incoming
             needed = g.target - g.total + g.preset_incoming
             if needed > allocated:
                 extra = needed - allocated
@@ -232,17 +231,12 @@ def allocate_savings(budget, goals, default_goal_name=None):
                     allocated = needed
                     remaining -= extra
                 else:
-                    # Use whatever surplus is available
                     allocated += remaining
                     remaining = 0
 
-        allocations.append(SavingsAllocation(
-            goal_name=g.goal_name,
-            allocated=allocated,
-            row_number=g.row_number,
-            is_default=is_default,
-            is_blatam=is_blatam,
-        ))
+        allocations.append(
+            _make_allocation(g, allocated, default_goal_name, default_goal)
+        )
 
     # Put remaining surplus in default goal
     if remaining > 0 and default_goal is not None:
@@ -264,7 +258,7 @@ def allocate_savings(budget, goals, default_goal_name=None):
 def find_savings_goal_rows(handler, sheet_name):
     """Re-scan savings section to get fresh row numbers by goal name.
 
-    Returns dict mapping goal_name → 1-based row number.
+    Returns dict mapping goal_name -> 1-based row number.
     """
     goals = read_savings_goals(handler, sheet_name)
     return {g.goal_name: g.row_number for g in goals}

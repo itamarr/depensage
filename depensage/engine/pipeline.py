@@ -20,7 +20,6 @@ from depensage.engine.dedup import deduplicate, deduplicate_income
 from depensage.engine.formatter import (
     format_for_sheet, format_bank_expenses_for_sheet, format_income_for_sheet,
 )
-from depensage.engine.carryover import run_carryover, get_previous_month
 from depensage.engine.staging import StagedPipelineResult, RowMeta
 from depensage.sheets.spreadsheet_handler import SheetHandler, SECTION_MARKERS
 from depensage.sheets.sheet_utils import SheetUtils
@@ -153,49 +152,16 @@ def run_pipeline(statement_paths, handlers, classifier, year=None,
     if bank_exp_result.expenses is not None and not bank_exp_result.expenses.empty:
         all_expenses.append(("bank", bank_exp_result.expenses))
 
-    sheets_seen = set()
+    new_sheets = set()  # sheet names that need creation at commit time
 
-    def _try_carryover(sheet_name, tx_year):
-        prev_month, year_offset = get_previous_month(sheet_name)
-        if prev_month is None:
-            return
-        prev_year = tx_year + year_offset
-        try:
-            prev_handler = get_handler(prev_year)
-        except ValueError:
-            logger.info(
-                f"No handler for year {prev_year}, skipping carryover "
-                f"from {prev_month}"
-            )
-            return
-        if not prev_handler.sheet_exists(prev_month):
-            logger.info(
-                f"Previous month sheet '{prev_month}' does not exist, "
-                f"skipping carryover"
-            )
-            return
-        dest_handler = get_handler(tx_year)
-        result = run_carryover(
-            prev_handler, prev_month, dest_handler, sheet_name
-        )
-        logger.info(
-            f"Carryover {prev_month} → {sheet_name}: "
-            f"{result['budget_lines']} budget, "
-            f"{result['savings_lines']} savings"
-        )
-
-    def _ensure_sheet(sample_date, tx_year):
-        """Get or create month sheet, run carryover if new."""
+    def _check_sheet(sample_date, tx_year):
+        """Check if month sheet exists. Returns (sheet_name, is_new)."""
         handler = get_handler(tx_year)
         expected_name = SheetUtils.get_sheet_name_for_date(sample_date)
-        is_new = expected_name and not handler.sheet_exists(expected_name)
-        sheet_name = handler.get_or_create_month_sheet(sample_date)
-        if not sheet_name:
-            return None
-        if is_new and sheet_name not in sheets_seen:
-            sheets_seen.add(sheet_name)
-            _try_carryover(sheet_name, tx_year)
-        return sheet_name
+        if not expected_name:
+            return None, False
+        is_new = not handler.sheet_exists(expected_name)
+        return expected_name, is_new
 
     # Stage expenses (CC + bank)
     for source, expenses_df in all_expenses:
@@ -205,42 +171,50 @@ def run_pipeline(statement_paths, handlers, classifier, year=None,
         for period, group in expenses_df.groupby("_year_month"):
             sample_date = group["date"].iloc[0]
             tx_year = sample_date.year
-            handler = get_handler(tx_year)
 
-            sheet_name = _ensure_sheet(sample_date, tx_year)
+            sheet_name, is_new = _check_sheet(sample_date, tx_year)
             if not sheet_name:
-                logger.error(f"Failed to get/create sheet for {period}")
+                logger.error(f"Failed to determine sheet name for {period}")
                 continue
-
-            marker_row = handler.find_section_marker(sheet_name, "budget")
-            if marker_row is None:
-                raise ValueError(
-                    f"No {SECTION_MARKERS['budget']} marker found in "
-                    f"sheet '{sheet_name}'."
-                )
-
-            existing_rows = handler.read_expense_rows(sheet_name)
-            month_txns = group.drop(columns=["_year_month"])
-            new_txns = deduplicate(month_txns, existing_rows)
-            dup_count = len(month_txns) - len(new_txns)
 
             stage = staged.get_or_create_stage(sheet_name, tx_year)
-            stage.duplicates += dup_count
+            month_txns = group.drop(columns=["_year_month"])
 
-            if new_txns.empty:
-                continue
+            if is_new:
+                # Defer sheet creation to commit time
+                stage.needs_sheet_creation = True
+                new_sheets.add(sheet_name)
+                # No existing data to dedup against
+                new_txns = month_txns
+            else:
+                handler = get_handler(tx_year)
+                marker_row = handler.find_section_marker(sheet_name, "budget")
+                if marker_row is None:
+                    raise ValueError(
+                        f"No {SECTION_MARKERS['budget']} marker found in "
+                        f"sheet '{sheet_name}'."
+                    )
+
+                existing_rows = handler.read_expense_rows(sheet_name)
+                new_txns = deduplicate(month_txns, existing_rows)
+                dup_count = len(month_txns) - len(new_txns)
+                stage.duplicates += dup_count
+
+                if new_txns.empty:
+                    continue
+
+                first_empty = handler.find_first_empty_expense_row(sheet_name)
+                rows_needed = len(new_txns)
+                last_data_row = marker_row - 2
+                available = last_data_row - first_empty + 1
+                insert_needed = max(0, rows_needed - available)
+                stage.expense_start_row = first_empty
+                stage.expense_insert_needed += insert_needed
 
             if source == "cc":
                 formatted = format_for_sheet(new_txns)
             else:
                 formatted = format_bank_expenses_for_sheet(new_txns)
-
-            first_empty = handler.find_first_empty_expense_row(sheet_name)
-            rows_needed = len(formatted)
-            last_data_row = marker_row - 2
-            available = last_data_row - first_empty + 1
-
-            insert_needed = max(0, rows_needed - available)
 
             # Build RowMeta for each formatted row
             for row in formatted:
@@ -252,8 +226,6 @@ def run_pipeline(statement_paths, handlers, classifier, year=None,
                 ))
 
             stage.new_expenses.extend(formatted)
-            stage.expense_start_row = first_empty
-            stage.expense_insert_needed += insert_needed
 
     # Stage income
     if bank_inc_result.income is not None and not bank_inc_result.income.empty:
@@ -263,43 +235,48 @@ def run_pipeline(statement_paths, handlers, classifier, year=None,
         for period, group in income_df.groupby("_year_month"):
             sample_date = group["date"].iloc[0]
             tx_year = sample_date.year
-            handler = get_handler(tx_year)
 
-            sheet_name = _ensure_sheet(sample_date, tx_year)
+            sheet_name, is_new = _check_sheet(sample_date, tx_year)
             if not sheet_name:
-                logger.error(f"Failed to get/create sheet for income {period}")
+                logger.error(f"Failed to determine sheet name for income {period}")
                 continue
-
-            # Dedup income
-            existing_income = handler.read_income_rows(sheet_name)
-            month_income = group.drop(columns=["_year_month"])
-            new_income = deduplicate_income(month_income, existing_income)
-            inc_dup_count = len(month_income) - len(new_income)
 
             stage = staged.get_or_create_stage(sheet_name, tx_year)
-            stage.income_duplicates += inc_dup_count
+            month_income = group.drop(columns=["_year_month"])
 
-            if new_income.empty:
-                continue
+            if is_new:
+                stage.needs_sheet_creation = True
+                new_sheets.add(sheet_name)
+                new_income = month_income
+            else:
+                handler = get_handler(tx_year)
+                existing_income = handler.read_income_rows(sheet_name)
+                new_income = deduplicate_income(month_income, existing_income)
+                inc_dup_count = len(month_income) - len(new_income)
+                stage.income_duplicates += inc_dup_count
+
+                if new_income.empty:
+                    continue
+
+                first_empty = handler.find_first_empty_income_row(sheet_name)
+                if first_empty is None:
+                    logger.error(
+                        f"Could not find income insertion point in {sheet_name}"
+                    )
+                    continue
+
+                savings_marker = handler.find_section_marker(sheet_name, "savings")
+                if savings_marker is None:
+                    logger.error(f"No savings marker in {sheet_name}")
+                    continue
+
+                last_income_data = savings_marker - 3
+                available = last_income_data - first_empty + 1
+                insert_needed = max(0, len(new_income) - available)
+                stage.income_start_row = first_empty
+                stage.income_insert_needed += insert_needed
 
             formatted = format_income_for_sheet(new_income)
-
-            # Find insertion point in income section
-            first_empty = handler.find_first_empty_income_row(sheet_name)
-            if first_empty is None:
-                logger.error(
-                    f"Could not find income insertion point in {sheet_name}"
-                )
-                continue
-
-            savings_marker = handler.find_section_marker(sheet_name, "savings")
-            if savings_marker is None:
-                logger.error(f"No savings marker in {sheet_name}")
-                continue
-
-            last_income_data = savings_marker - 3
-            available = last_income_data - first_empty + 1
-            insert_needed = max(0, len(formatted) - available)
 
             # Build RowMeta for income rows
             for row in formatted:
@@ -311,8 +288,6 @@ def run_pipeline(statement_paths, handlers, classifier, year=None,
                 ))
 
             stage.new_income.extend(formatted)
-            stage.income_start_row = first_empty
-            stage.income_insert_needed += insert_needed
 
     # 6. Stage bank balances (continued below after savings)
 
@@ -332,9 +307,11 @@ def run_pipeline(statement_paths, handlers, classifier, year=None,
         except ValueError:
             logger.info(f"No handler for year {bal_year}, skipping bank balance")
             continue
-        if not handler.sheet_exists(sheet_name):
+        key = (sheet_name, bal_year)
+        if not handler.sheet_exists(sheet_name) and key not in staged.month_stages:
             logger.info(
-                f"Sheet '{sheet_name}' does not exist, skipping bank balance"
+                f"Sheet '{sheet_name}' does not exist and no stage for it, "
+                f"skipping bank balance"
             )
             continue
         stage = staged.get_or_create_stage(sheet_name, bal_year)
@@ -356,6 +333,10 @@ def run_pipeline(statement_paths, handlers, classifier, year=None,
 
     for key in list(staged.month_stages.keys()):
         sheet_name, tx_year = key
+        stage = staged.month_stages[key]
+        # Skip new sheets — savings computed at commit time after creation
+        if stage.needs_sheet_creation:
+            continue
         handler = get_handler(tx_year)
         try:
             budget = read_savings_budget(handler, sheet_name)

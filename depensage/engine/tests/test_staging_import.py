@@ -11,7 +11,7 @@ from depensage.engine.staging import (
 
 
 class TestExportImportRoundTrip(unittest.TestCase):
-    """Test that export → import preserves data and detects changes."""
+    """Test that export -> import preserves data and detects changes."""
 
     def _make_staged_with_meta(self):
         staged = StagedPipelineResult(total_parsed=3, classified=2, unclassified=1)
@@ -124,7 +124,7 @@ class TestExportImportRoundTrip(unittest.TestCase):
 
 
     def test_bank_balance_round_trip(self):
-        """Bank balance survives export → import round-trip."""
+        """Bank balance survives export -> import round-trip."""
         staged = self._make_staged_with_meta()
         stage = staged.month_stages[("February", 2026)]
         stage.bank_balance = 12345.67
@@ -226,13 +226,37 @@ class TestExportHighlighting(unittest.TestCase):
 
         wb = openpyxl.load_workbook(path)
         ws = wb["Jan 2026"]
-        # Row 2: נסיעות with no subcat → subcat should be red
+        # Row 2: נסיעות with no subcat -> subcat should be red
         sub_fill = ws.cell(row=2, column=3).fill
         self.assertEqual(sub_fill.start_color.rgb, "00FFCCCC")
 
-        # Row 3: אלוני with no subcat → subcat should NOT be red
+        # Row 3: אלוני with no subcat -> subcat should NOT be red
         sub_fill_no = ws.cell(row=3, column=3).fill
         self.assertNotEqual(sub_fill_no.start_color.rgb, "00FFCCCC")
+
+    def test_xlsx_sheets_not_rtl(self):
+        """XLSX sheets should be left-to-right."""
+        import openpyxl
+
+        staged = StagedPipelineResult()
+        stage = staged.get_or_create_stage("January", 2026)
+        stage.new_expenses = [
+            ["Shop A", "", "", "100.50", "סופר", "01/01/2026", "CC"],
+        ]
+        stage.expense_meta = [
+            RowMeta(orig_category="סופר", orig_subcategory=""),
+        ]
+
+        path = os.path.join(tempfile.mkdtemp(), "test.xlsx")
+        staged.export_xlsx(path)
+
+        wb = openpyxl.load_workbook(path)
+        for ws_name in wb.sheetnames:
+            ws = wb[ws_name]
+            self.assertFalse(
+                ws.sheet_view.rightToLeft,
+                f"Sheet '{ws_name}' is RTL but should be LTR"
+            )
 
 
 class TestRowMetaInMonthStage(unittest.TestCase):
@@ -264,7 +288,7 @@ class TestRowMetaInMonthStage(unittest.TestCase):
 
 
 class TestSavingsRoundTrip(unittest.TestCase):
-    """Test savings allocation export → import round-trip."""
+    """Test savings allocation export -> import round-trip."""
 
     def _make_staged_with_savings(self):
         from depensage.engine.savings_allocator import SavingsAllocation
@@ -272,11 +296,14 @@ class TestSavingsRoundTrip(unittest.TestCase):
         stage = staged.get_or_create_stage("February", 2026)
         stage.savings_allocations = [
             SavingsAllocation(goal_name="רכב", allocated=2000, row_number=60,
-                              is_default=False, is_blatam=False),
+                              is_default=False, is_blatam=False,
+                              preset_incoming=2000, target=10000, current_total=5000),
             SavingsAllocation(goal_name="דירה", allocated=3500, row_number=61,
-                              is_default=True, is_blatam=False),
+                              is_default=True, is_blatam=False,
+                              preset_incoming=0, target=50000, current_total=20000),
             SavingsAllocation(goal_name='בלת"ם', allocated=800, row_number=62,
-                              is_default=False, is_blatam=True),
+                              is_default=False, is_blatam=True,
+                              preset_incoming=500, target=1000, current_total=700),
         ]
         return staged
 
@@ -298,6 +325,10 @@ class TestSavingsRoundTrip(unittest.TestCase):
         self.assertTrue(alloc_map['בלת"ם'].is_blatam)
         # Row numbers preserved from metadata
         self.assertEqual(alloc_map["רכב"].row_number, 60)
+        # Context fields preserved
+        self.assertEqual(alloc_map["רכב"].preset_incoming, 2000)
+        self.assertEqual(alloc_map["רכב"].target, 10000)
+        self.assertEqual(alloc_map["רכב"].current_total, 5000)
 
     def test_savings_user_edit(self):
         """Modified allocation value survives import."""
@@ -331,7 +362,7 @@ class TestSavingsRoundTrip(unittest.TestCase):
             SavingsAllocation(goal_name="רכב", allocated=2000, row_number=60,
                               is_default=False, is_blatam=False),
         ]
-        stage.savings_warning = "תקציב חסכון נמוך"
+        stage.savings_warning = "Budget too low"
 
         path = os.path.join(tempfile.mkdtemp(), "test.xlsx")
         staged.export_xlsx(path)
@@ -342,7 +373,7 @@ class TestSavingsRoundTrip(unittest.TestCase):
         # Find warning text in the sheet
         found_warning = False
         for row in ws.iter_rows(values_only=True):
-            if row[0] and "תקציב חסכון נמוך" in str(row[0]):
+            if row[0] and "Budget too low" in str(row[0]):
                 found_warning = True
                 break
         self.assertTrue(found_warning, "Warning text not found in XLSX")
@@ -357,6 +388,44 @@ class TestSavingsRoundTrip(unittest.TestCase):
                               is_default=False, is_blatam=False),
         ]
         self.assertTrue(staged.has_writes())
+
+    def test_has_writes_with_new_sheet(self):
+        """has_writes() returns True when a new sheet needs creation."""
+        staged = StagedPipelineResult()
+        stage = staged.get_or_create_stage("January", 2026)
+        stage.needs_sheet_creation = True
+        self.assertTrue(staged.has_writes())
+
+    def test_new_sheet_flag_round_trip(self):
+        """needs_sheet_creation flag preserved via _row_meta."""
+        from depensage.engine.savings_allocator import SavingsAllocation
+        staged = StagedPipelineResult()
+        stage = staged.get_or_create_stage("March", 2026)
+        stage.needs_sheet_creation = True
+        stage.new_expenses = [
+            ["Shop", "", "", "10.00", "cat", "03/01/2026", "CC"],
+        ]
+        stage.expense_meta = [
+            RowMeta(orig_category="cat", orig_subcategory=""),
+        ]
+
+        path = os.path.join(tempfile.mkdtemp(), "test.xlsx")
+        staged.export_xlsx(path)
+
+        stages, changes = import_staged_xlsx(path)
+        self.assertTrue(stages["Mar 2026"].needs_sheet_creation)
+
+    def test_summary_shows_english_labels(self):
+        """Summary output uses English labels."""
+        from depensage.engine.savings_allocator import SavingsAllocation
+        staged = StagedPipelineResult(total_parsed=1, classified=1)
+        stage = staged.get_or_create_stage("January", 2026)
+        stage.needs_sheet_creation = True
+        stage.new_expenses = [["A", "", "", "10", "cat", "01/01", "CC"]]
+
+        summary = staged.summary()
+        self.assertIn("NEW SHEET", summary)
+        self.assertIn("savings: computed at commit", summary)
 
 
 if __name__ == "__main__":
