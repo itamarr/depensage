@@ -5,7 +5,9 @@ Shared CLI helpers: authentication, handler creation, category fetching.
 import os
 import sys
 
-from depensage.config.settings import load_settings, get_spreadsheet_id
+from depensage.config.settings import (
+    load_settings, get_spreadsheet_entry, get_entries_for_year, get_all_years,
+)
 from depensage.sheets.spreadsheet_handler import SheetHandler
 
 
@@ -24,67 +26,148 @@ def _authenticate_handler(spreadsheet_id, credentials):
     return handler
 
 
+def _resolve_for_year(year, settings, credentials):
+    """Resolve a single handler for a year.
+
+    If multiple spreadsheets are configured for the year, uses the one
+    marked as default. If no default, prompts the user to choose.
+
+    Returns authenticated SheetHandler.
+    """
+    entries = get_entries_for_year(year, settings)
+    if not entries:
+        available_years = get_all_years(settings)
+        raise ValueError(
+            f"No spreadsheet configured for year {year}. "
+            f"Available years: {available_years}"
+        )
+    if len(entries) == 1:
+        _, entry = entries[0]
+        return _authenticate_handler(entry["id"], credentials)
+
+    # Multiple entries — check for default
+    defaults = [(k, e) for k, e in entries if e.get("default")]
+    if len(defaults) == 1:
+        _, entry = defaults[0]
+        return _authenticate_handler(entry["id"], credentials)
+
+    # No default or multiple defaults — ask user
+    print(f"Multiple spreadsheets for year {year}:")
+    for i, (k, e) in enumerate(entries, 1):
+        default_tag = " (default)" if e.get("default") else ""
+        print(f"  {i}. {k}{default_tag}")
+    while True:
+        try:
+            choice = input(f"Choose [1-{len(entries)}]: ").strip()
+            idx = int(choice) - 1
+            if 0 <= idx < len(entries):
+                _, entry = entries[idx]
+                return _authenticate_handler(entry["id"], credentials)
+        except (ValueError, EOFError):
+            pass
+        print("Invalid choice.")
+
+
 def get_handler(args):
-    """Get a single SheetHandler for the specified year (or the only configured one)."""
-    settings = load_settings()
-    credentials = args.credentials or settings["credentials_file"]
-    credentials = os.path.abspath(credentials)
+    """Get a single SheetHandler.
 
-    if args.spreadsheet_id:
-        return _authenticate_handler(args.spreadsheet_id, credentials)
-
-    year = getattr(args, "year", None)
-    spreadsheets = settings["spreadsheets"]
-
-    if year:
-        spreadsheet_id = get_spreadsheet_id(year, settings)
-    elif len(spreadsheets) == 1:
-        spreadsheet_id = next(iter(spreadsheets.values()))
-    else:
-        available = ", ".join(sorted(spreadsheets.keys()))
-        print(f"Multiple spreadsheets configured ({available}). "
-              f"Use --year to select one.", file=sys.stderr)
-        sys.exit(1)
-
-    return _authenticate_handler(spreadsheet_id, credentials)
-
-
-def get_handlers_for_pipeline(args):
-    """Get a dict of {year: SheetHandler} for the pipeline.
-
-    If --year is specified, returns only that year's handler (plus previous
-    year if configured, for January carryover).
-    Otherwise returns handlers for all configured years.
+    Resolution order:
+    1. --spreadsheet-id (direct override)
+    2. --spreadsheet (config key lookup)
+    3. Auto-select if only one entry in config
+    4. Error if ambiguous
     """
     settings = load_settings()
     credentials = args.credentials or settings["credentials_file"]
     credentials = os.path.abspath(credentials)
 
-    if args.spreadsheet_id:
+    if getattr(args, "spreadsheet_id", None):
         return _authenticate_handler(args.spreadsheet_id, credentials)
 
+    key = getattr(args, "spreadsheet", None)
     spreadsheets = settings["spreadsheets"]
-    year = getattr(args, "year", None)
 
-    if year:
-        year_int = int(year)
-        handlers = {year_int: _authenticate_handler(
-            get_spreadsheet_id(year, settings), credentials
-        )}
-        prev_year = str(year_int - 1)
-        if prev_year in spreadsheets:
-            handlers[year_int - 1] = _authenticate_handler(
-                spreadsheets[prev_year], credentials
+    if key:
+        entry = get_spreadsheet_entry(key, settings)
+        return _authenticate_handler(entry["id"], credentials)
+
+    if len(spreadsheets) == 1:
+        entry = next(iter(spreadsheets.values()))
+        return _authenticate_handler(entry["id"], credentials)
+
+    available = ", ".join(sorted(spreadsheets.keys()))
+    print(f"Multiple spreadsheets configured ({available}). "
+          f"Use --spreadsheet to select one.", file=sys.stderr)
+    sys.exit(1)
+
+
+def get_handlers_for_pipeline(args):
+    """Get handlers and year filter for the pipeline.
+
+    Returns:
+        (handlers, year_filter) where:
+        - handlers: dict {year (int): SheetHandler} or single SheetHandler
+        - year_filter: int (filter transactions to this year) or None (all years)
+    """
+    settings = load_settings()
+    credentials = args.credentials or settings["credentials_file"]
+    credentials = os.path.abspath(credentials)
+
+    if getattr(args, "spreadsheet_id", None):
+        return _authenticate_handler(args.spreadsheet_id, credentials), None
+
+    key = getattr(args, "spreadsheet", None)
+    spreadsheets = settings["spreadsheets"]
+
+    if key:
+        entry = get_spreadsheet_entry(key, settings)
+        year = entry.get("year")
+        if year is None:
+            print(
+                f"Error: Spreadsheet '{key}' has no 'year' field. "
+                f"Cannot determine which year to process.",
+                file=sys.stderr,
             )
-        return handlers
+            sys.exit(1)
 
+        handlers = {year: _authenticate_handler(entry["id"], credentials)}
+
+        # Load previous year for carryover
+        prev_key = getattr(args, "prev_spreadsheet", None)
+        prev_year = year - 1
+        if prev_key:
+            prev_entry = get_spreadsheet_entry(prev_key, settings)
+            handlers[prev_year] = _authenticate_handler(
+                prev_entry["id"], credentials
+            )
+        else:
+            prev_entries = get_entries_for_year(prev_year, settings)
+            if len(prev_entries) == 1:
+                _, prev_entry = prev_entries[0]
+                handlers[prev_year] = _authenticate_handler(
+                    prev_entry["id"], credentials
+                )
+            elif len(prev_entries) > 1:
+                # Multiple — use default or ask
+                defaults = [
+                    (k, e) for k, e in prev_entries if e.get("default")
+                ]
+                if len(defaults) == 1:
+                    _, prev_entry = defaults[0]
+                    handlers[prev_year] = _authenticate_handler(
+                        prev_entry["id"], credentials
+                    )
+                # else: skip — user can specify --prev-spreadsheet
+
+        return handlers, year
+
+    # No --spreadsheet: load handlers for all configured years
+    all_years = get_all_years(settings)
     handlers = {}
-    for y, sid in spreadsheets.items():
-        try:
-            handlers[int(y)] = _authenticate_handler(sid, credentials)
-        except ValueError:
-            continue  # skip non-year keys like "template"
-    return handlers
+    for year in all_years:
+        handlers[year] = _resolve_for_year(year, settings, credentials)
+
+    return handlers, None
 
 
 def fetch_categories(handler):

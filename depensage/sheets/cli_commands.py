@@ -336,11 +336,10 @@ def cmd_process(args):
     from depensage.classifier.bank_lookup import BankLookupClassifier
     from depensage.classifier.income_lookup import IncomeLookupClassifier
 
-    handlers = get_handlers_for_pipeline(args)
+    handlers, year_filter = get_handlers_for_pipeline(args)
     classifier = LookupClassifier()
     bank_classifier = BankLookupClassifier()
     income_classifier = IncomeLookupClassifier()
-    year = int(args.year) if args.year else None
 
     paths = args.statements
     for p in paths:
@@ -349,7 +348,7 @@ def cmd_process(args):
             sys.exit(1)
 
     staged = run_pipeline(
-        paths, handlers, classifier, year=year,
+        paths, handlers, classifier, year=year_filter,
         bank_classifier=bank_classifier,
         income_classifier=income_classifier,
     )
@@ -465,7 +464,7 @@ def cmd_commit(args):
         print(f"File not found: {xlsx_path}", file=sys.stderr)
         sys.exit(1)
 
-    handlers = get_handlers_for_pipeline(args)
+    handlers, _ = get_handlers_for_pipeline(args)
     staged, changes = _import_and_derive_coordinates(xlsx_path, handlers)
     if staged is None:
         return
@@ -519,21 +518,26 @@ def cmd_verify(args):
         print("No CC lump sums found in bank transcript.")
         return
 
-    handlers = get_handlers_for_pipeline(args)
-    year = int(args.year) if args.year else None
+    handlers, year_filter = get_handlers_for_pipeline(args)
 
     if isinstance(handlers, dict):
-        if year is None:
-            print("Error: --year is required when multiple spreadsheets are configured.")
+        if year_filter is None:
+            print(
+                "Error: --spreadsheet is required for verify "
+                "(need to know which year to check)."
+            )
             return
-        handler = handlers[year]
-        prev_handler = handlers.get(year - 1)
+        handler = handlers[year_filter]
+        prev_handler = handlers.get(year_filter - 1)
     else:
         handler = handlers
         prev_handler = None
+        if year_filter is None:
+            print("Error: Cannot determine year. Use --spreadsheet.")
+            return
 
     result = verify_cc_charges(
-        handler, bank_result.cc_lump_sums, year or 2026,
+        handler, bank_result.cc_lump_sums, year_filter,
         prev_year_handler=prev_handler,
     )
 
@@ -549,25 +553,43 @@ def cmd_verify(args):
 def cmd_carryover(args):
     """Manually run carryover from one month to another."""
     from depensage.engine.carryover import run_carryover
-    from depensage.sheets.cli_helpers import _authenticate_handler
+    from depensage.sheets.cli_helpers import _authenticate_handler, _resolve_for_year
 
-    from depensage.config.settings import load_settings, get_spreadsheet_id
+    from depensage.config.settings import load_settings, get_spreadsheet_entry
 
     settings = load_settings()
     credentials = args.credentials or settings["credentials_file"]
     credentials = os.path.abspath(credentials)
 
-    source_year = int(args.source_year or args.year or 0)
-    dest_year = int(args.dest_year or args.year or 0)
-    if not source_year or not dest_year:
-        print("Specify --year or both --source-year and --dest-year.", file=sys.stderr)
+    # Resolve destination spreadsheet
+    dest_key = getattr(args, "dest_spreadsheet", None) or args.spreadsheet
+    if not dest_key:
+        print(
+            "Specify --spreadsheet or --dest-spreadsheet.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    dest_entry = get_spreadsheet_entry(dest_key, settings)
+    dest_year = dest_entry.get("year")
+    if not dest_year:
+        print(f"Spreadsheet '{dest_key}' has no year.", file=sys.stderr)
         sys.exit(1)
 
-    source_sid = get_spreadsheet_id(str(source_year), settings)
-    dest_sid = get_spreadsheet_id(str(dest_year), settings)
+    # Resolve source spreadsheet
+    source_key = getattr(args, "source_spreadsheet", None)
+    if source_key:
+        source_entry = get_spreadsheet_entry(source_key, settings)
+        source_year = source_entry.get("year", dest_year - 1)
+    else:
+        source_year = dest_year - 1 if args.source != args.dest else dest_year
 
-    source_handler = _authenticate_handler(source_sid, credentials)
-    dest_handler = _authenticate_handler(dest_sid, credentials)
+    source_handler = (
+        _authenticate_handler(
+            get_spreadsheet_entry(source_key, settings)["id"], credentials
+        ) if source_key
+        else _resolve_for_year(source_year, settings, credentials)
+    )
+    dest_handler = _authenticate_handler(dest_entry["id"], credentials)
 
     if not source_handler.sheet_exists(args.source):
         print(f"Source sheet '{args.source}' not found.", file=sys.stderr)
@@ -578,7 +600,7 @@ def cmd_carryover(args):
 
     result = run_carryover(source_handler, args.source, dest_handler, args.dest)
 
-    print(f"\nCarryover {args.source} ({source_year}) → {args.dest} ({dest_year}):")
+    print(f"\nCarryover {args.source} ({source_year}) -> {args.dest} ({dest_year}):")
     print(f"  Budget lines:  {result['budget_lines']}")
     print(f"  Savings lines: {result['savings_lines']}")
     if result['income_total'] is not None:

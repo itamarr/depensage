@@ -23,7 +23,16 @@ def main():
     parser = argparse.ArgumentParser(description="DepenSage Sheets CLI")
     parser.add_argument("--spreadsheet-id", help="Google Spreadsheet ID (overrides config)")
     parser.add_argument("--credentials", help="Path to service account JSON key")
-    parser.add_argument("--year", help="Year to operate on (e.g. 2026)")
+    parser.add_argument(
+        "--spreadsheet", "-s",
+        help="Spreadsheet config key (e.g. 2026, 2026_dev). "
+             "Filters transactions to that spreadsheet's year.",
+    )
+    parser.add_argument(
+        "--prev-spreadsheet",
+        help="Previous year spreadsheet key for cross-year carryover "
+             "(auto-detected if omitted)",
+    )
 
     subparsers = parser.add_subparsers(dest="command")
 
@@ -82,8 +91,14 @@ def main():
     )
     carryover_parser.add_argument("source", help="Source month (e.g. December)")
     carryover_parser.add_argument("dest", help="Destination month (e.g. January)")
-    carryover_parser.add_argument("--source-year", help="Source year (default: --year)")
-    carryover_parser.add_argument("--dest-year", help="Destination year (default: --year)")
+    carryover_parser.add_argument(
+        "--source-spreadsheet",
+        help="Source spreadsheet key (default: previous year of --spreadsheet)",
+    )
+    carryover_parser.add_argument(
+        "--dest-spreadsheet",
+        help="Destination spreadsheet key (default: --spreadsheet)",
+    )
 
     commit_parser = subparsers.add_parser(
         "commit", help="Commit a staged XLSX to the spreadsheet (no lookup review)"

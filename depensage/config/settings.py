@@ -43,10 +43,19 @@ def load_settings(config_file=None, force_reload=False):
 
     Config format:
         {
-            "spreadsheets": {"2025": "spreadsheet_id_1", "2026": "spreadsheet_id_2"},
+            "spreadsheets": {
+                "2026": {"id": "spreadsheet_id", "year": 2026, "default": true},
+                "2026_dev": {"id": "dev_id", "year": 2026},
+                "template": {"id": "template_id"}
+            },
             "credentials_file": ".secrets/credentials.json",
-            "default_savings_goal": "דירה"  // optional
+            "default_savings_goal": "דירה"
         }
+
+    Each spreadsheet entry is a dict with:
+        - "id" (required): Google Spreadsheet ID
+        - "year" (optional): Year this spreadsheet covers
+        - "default" (optional): If true, preferred when multiple entries share a year
 
     Args:
         config_file: Path to configuration file (default: .secrets/config.json)
@@ -86,7 +95,17 @@ def load_settings(config_file=None, force_reload=False):
             raise ValueError(f"Missing required settings: {', '.join(missing_keys)}")
 
         if not isinstance(settings['spreadsheets'], dict):
-            raise ValueError("'spreadsheets' must be a dict mapping year to spreadsheet ID")
+            raise ValueError(
+                "'spreadsheets' must be a dict of spreadsheet entries"
+            )
+
+        # Validate each entry is a dict with an 'id' field
+        for key, entry in settings['spreadsheets'].items():
+            if not isinstance(entry, dict) or 'id' not in entry:
+                raise ValueError(
+                    f"Spreadsheet entry '{key}' must be a dict with an 'id' field. "
+                    f"Example: {{\"{key}\": {{\"id\": \"spreadsheet_id\", \"year\": 2026}}}}"
+                )
 
         creds_file = settings.get('credentials_file')
         if not os.path.exists(creds_file):
@@ -104,27 +123,60 @@ def load_settings(config_file=None, force_reload=False):
     return settings
 
 
-def get_spreadsheet_id(year, settings=None):
-    """Get the spreadsheet ID for a given year.
+def get_spreadsheet_entry(key, settings=None):
+    """Get a spreadsheet entry by its config key.
 
     Args:
-        year: Year as int or string (e.g., 2026 or "2026").
+        key: Config key (e.g., "2026", "2026_dev", "template").
         settings: Settings dict (loads from config if None).
 
     Returns:
-        Spreadsheet ID string.
+        Dict with 'id', optional 'year', optional 'default'.
 
     Raises:
-        ValueError: If no spreadsheet configured for the given year.
+        ValueError: If key not found in config.
     """
     if settings is None:
         settings = load_settings()
-    year_str = str(year)
-    spreadsheets = settings['spreadsheets']
-    if year_str not in spreadsheets:
-        available = ', '.join(sorted(spreadsheets.keys()))
+    entries = settings['spreadsheets']
+    if key not in entries:
+        available = ', '.join(sorted(entries.keys()))
         raise ValueError(
-            f"No spreadsheet configured for year {year_str}. "
-            f"Available: {available}"
+            f"Spreadsheet '{key}' not found. Available: {available}"
         )
-    return spreadsheets[year_str]
+    return entries[key]
+
+
+def get_entries_for_year(year, settings=None):
+    """Get all (key, entry) pairs for a given year.
+
+    Args:
+        year: Year as int.
+        settings: Settings dict (loads from config if None).
+
+    Returns:
+        List of (key, entry) tuples where entry["year"] == year.
+    """
+    if settings is None:
+        settings = load_settings()
+    return [
+        (k, e) for k, e in settings['spreadsheets'].items()
+        if e.get('year') == year
+    ]
+
+
+def get_all_years(settings=None):
+    """Get all unique years configured (sorted).
+
+    Args:
+        settings: Settings dict (loads from config if None).
+
+    Returns:
+        Sorted list of unique year ints.
+    """
+    if settings is None:
+        settings = load_settings()
+    return sorted(set(
+        e['year'] for e in settings['spreadsheets'].values()
+        if 'year' in e
+    ))

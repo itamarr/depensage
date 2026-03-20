@@ -16,7 +16,8 @@ flake8 depensage/ && black depensage/  # Lint and format
 ```bash
 # Main pipeline (CC statements and/or bank transcripts, auto-detected)
 python -m depensage.sheets.cli process statement1.xlsx [bank_transcript.xlsx ...]
-python -m depensage.sheets.cli --year 2026 process statement.xlsx
+python -m depensage.sheets.cli -s 2026 process statement.xlsx       # specific spreadsheet
+python -m depensage.sheets.cli -s 2026_dev process statement.xlsx   # dev spreadsheet
 
 # Review unknown merchants/actions
 python -m depensage.sheets.cli review statement.xlsx           # CC merchants
@@ -28,10 +29,12 @@ python -m depensage.sheets.cli build-lookup [--output PATH]
 python -m depensage.sheets.cli consolidate-patterns
 
 # Manual carryover
-python -m depensage.sheets.cli carryover December January --source-year 2025 --dest-year 2026
+python -m depensage.sheets.cli -s 2026 carryover December January
+python -m depensage.sheets.cli carryover December January \
+  --source-spreadsheet 2025 --dest-spreadsheet 2026
 
 # CC verification against bank lump sums
-python -m depensage.sheets.cli --year 2026 verify bank_transcript.xlsx
+python -m depensage.sheets.cli -s 2026 verify bank_transcript.xlsx
 
 # Sheet inspection
 python -m depensage.sheets.cli list-sheets
@@ -40,7 +43,7 @@ python -m depensage.sheets.cli formulas <sheet> <range>
 python -m depensage.sheets.cli metadata
 ```
 
-Override defaults with `--spreadsheet-id` and `--credentials` flags.
+Override defaults with `--spreadsheet-id`, `--credentials`, and `-s/--spreadsheet` flags.
 
 ## Architecture
 

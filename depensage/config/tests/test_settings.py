@@ -10,7 +10,8 @@ import shutil
 
 import depensage.config.settings
 from depensage.config.settings import (
-    load_settings, get_config_path, get_spreadsheet_id, REQUIRED_SETTINGS,
+    load_settings, get_config_path, get_spreadsheet_entry,
+    get_entries_for_year, get_all_years, REQUIRED_SETTINGS,
 )
 
 class TestSettings(unittest.TestCase):
@@ -61,38 +62,41 @@ class TestSettings(unittest.TestCase):
     def test_save_and_load(self):
         """Test saving and loading settings."""
         self._write_config({
-            'spreadsheets': {'2025': 'test_id_2025', '2026': 'test_id_2026'},
+            'spreadsheets': {
+                '2025': {'id': 'test_id_2025', 'year': 2025},
+                '2026': {'id': 'test_id_2026', 'year': 2026},
+            },
             'credentials_file': self.credentials_file,
         })
 
         settings = load_settings(self.config_file)
-        self.assertEqual(settings['spreadsheets']['2025'], 'test_id_2025')
-        self.assertEqual(settings['spreadsheets']['2026'], 'test_id_2026')
+        self.assertEqual(settings['spreadsheets']['2025']['id'], 'test_id_2025')
+        self.assertEqual(settings['spreadsheets']['2026']['id'], 'test_id_2026')
         self.assertEqual(settings['credentials_file'], self.credentials_file)
 
     def test_singleton_caching(self):
         """Test that settings are cached and reused."""
         self._write_config({
-            'spreadsheets': {'2025': 'test_id'},
+            'spreadsheets': {'2025': {'id': 'test_id'}},
             'credentials_file': self.credentials_file,
         })
 
         settings1 = load_settings(self.config_file)
-        self.assertEqual(settings1['spreadsheets']['2025'], 'test_id')
+        self.assertEqual(settings1['spreadsheets']['2025']['id'], 'test_id')
 
         # Modify file
         self._write_config({
-            'spreadsheets': {'2025': 'new_id'},
+            'spreadsheets': {'2025': {'id': 'new_id'}},
             'credentials_file': self.credentials_file,
         })
 
         # Should get cached version
         settings2 = load_settings(self.config_file)
-        self.assertEqual(settings2['spreadsheets']['2025'], 'test_id')
+        self.assertEqual(settings2['spreadsheets']['2025']['id'], 'test_id')
 
         # Force reload
         settings3 = load_settings(self.config_file, force_reload=True)
-        self.assertEqual(settings3['spreadsheets']['2025'], 'new_id')
+        self.assertEqual(settings3['spreadsheets']['2025']['id'], 'new_id')
 
     def test_load_invalid_json(self):
         """Test loading invalid JSON."""
@@ -117,7 +121,7 @@ class TestSettings(unittest.TestCase):
     def test_load_nonexistent_credentials_file(self):
         """Test loading settings with a nonexistent credentials file."""
         self._write_config({
-            'spreadsheets': {'2025': 'test_id'},
+            'spreadsheets': {'2025': {'id': 'test_id'}},
             'credentials_file': '/nonexistent/path.json',
         })
 
@@ -138,20 +142,104 @@ class TestSettings(unittest.TestCase):
 
         self.assertIn("must be a dict", str(context.exception))
 
-    def test_get_spreadsheet_id(self):
-        """Test getting spreadsheet ID by year."""
-        settings = {
-            'spreadsheets': {'2025': 'id_2025', '2026': 'id_2026'},
+    def test_entry_must_have_id(self):
+        """Test that each entry must have an 'id' field."""
+        self._write_config({
+            'spreadsheets': {'2025': {'year': 2025}},
             'credentials_file': self.credentials_file,
-        }
-
-        self.assertEqual(get_spreadsheet_id(2025, settings), 'id_2025')
-        self.assertEqual(get_spreadsheet_id('2026', settings), 'id_2026')
+        })
 
         with self.assertRaises(ValueError) as context:
-            get_spreadsheet_id(2024, settings)
-        self.assertIn("No spreadsheet configured for year 2024", str(context.exception))
+            load_settings(self.config_file)
+
+        self.assertIn("must be a dict with an 'id' field", str(context.exception))
+
+    def test_entry_must_be_dict(self):
+        """Test that string entries (old format) are rejected."""
+        self._write_config({
+            'spreadsheets': {'2025': 'just_an_id'},
+            'credentials_file': self.credentials_file,
+        })
+
+        with self.assertRaises(ValueError) as context:
+            load_settings(self.config_file)
+
+        self.assertIn("must be a dict with an 'id' field", str(context.exception))
+
+    def test_get_spreadsheet_entry(self):
+        """Test looking up spreadsheet entries by key."""
+        settings = {
+            'spreadsheets': {
+                '2025': {'id': 'id_2025', 'year': 2025},
+                '2026_dev': {'id': 'id_dev', 'year': 2026},
+            },
+        }
+
+        entry = get_spreadsheet_entry('2025', settings)
+        self.assertEqual(entry['id'], 'id_2025')
+        self.assertEqual(entry['year'], 2025)
+
+        entry = get_spreadsheet_entry('2026_dev', settings)
+        self.assertEqual(entry['id'], 'id_dev')
+
+        with self.assertRaises(ValueError) as context:
+            get_spreadsheet_entry('nonexistent', settings)
+        self.assertIn("not found", str(context.exception))
         self.assertIn("2025", str(context.exception))
+
+    def test_get_entries_for_year(self):
+        """Test finding entries by year."""
+        settings = {
+            'spreadsheets': {
+                '2026_prod': {'id': 'id_prod', 'year': 2026, 'default': True},
+                '2026_dev': {'id': 'id_dev', 'year': 2026},
+                '2025': {'id': 'id_2025', 'year': 2025},
+                'template': {'id': 'id_template'},
+            },
+        }
+
+        entries_2026 = get_entries_for_year(2026, settings)
+        self.assertEqual(len(entries_2026), 2)
+        keys = {k for k, _ in entries_2026}
+        self.assertEqual(keys, {'2026_prod', '2026_dev'})
+
+        entries_2025 = get_entries_for_year(2025, settings)
+        self.assertEqual(len(entries_2025), 1)
+
+        entries_2024 = get_entries_for_year(2024, settings)
+        self.assertEqual(len(entries_2024), 0)
+
+    def test_get_all_years(self):
+        """Test getting all configured years."""
+        settings = {
+            'spreadsheets': {
+                '2026_prod': {'id': 'id_prod', 'year': 2026},
+                '2026_dev': {'id': 'id_dev', 'year': 2026},
+                '2025': {'id': 'id_2025', 'year': 2025},
+                'template': {'id': 'id_template'},
+            },
+        }
+
+        years = get_all_years(settings)
+        self.assertEqual(years, [2025, 2026])
+
+    def test_template_entry_no_year(self):
+        """Template entries without year are valid and excluded from year queries."""
+        self._write_config({
+            'spreadsheets': {
+                'template': {'id': 'id_template'},
+                '2026': {'id': 'id_2026', 'year': 2026},
+            },
+            'credentials_file': self.credentials_file,
+        })
+
+        settings = load_settings(self.config_file)
+        years = get_all_years(settings)
+        self.assertEqual(years, [2026])
+
+        entry = get_spreadsheet_entry('template', settings)
+        self.assertEqual(entry['id'], 'id_template')
+        self.assertNotIn('year', entry)
 
 
 if __name__ == '__main__':
