@@ -404,5 +404,181 @@ class TestSavingsRoundTrip(unittest.TestCase):
         self.assertIn("1 savings allocations", summary)
 
 
+class TestIsNewRoundTrip(unittest.TestCase):
+
+    def test_is_new_preserved(self):
+        """is_new flag survives export -> import round-trip."""
+        staged = StagedPipelineResult()
+        stage = staged.get_or_create_stage("March", 2026)
+        stage.is_new = True
+        stage.new_expenses = [
+            ["Shop", "", "", "100.00", "סופר", "03/01/2026", "CC"],
+        ]
+        stage.expense_meta = [
+            RowMeta(orig_category="סופר", orig_subcategory=""),
+        ]
+
+        path = os.path.join(tempfile.mkdtemp(), "test.xlsx")
+        staged.export_xlsx(path)
+
+        stages, changes = import_staged_xlsx(path)
+        self.assertTrue(stages["Mar 2026"].is_new)
+
+    def test_existing_month_not_is_new(self):
+        """Months without is_new metadata stay is_new=False."""
+        staged = StagedPipelineResult()
+        stage = staged.get_or_create_stage("February", 2026)
+        stage.is_new = False
+        stage.new_expenses = [
+            ["Shop", "", "", "50.00", "סופר", "02/01/2026", "CC"],
+        ]
+        stage.expense_meta = [
+            RowMeta(orig_category="סופר", orig_subcategory=""),
+        ]
+
+        path = os.path.join(tempfile.mkdtemp(), "test.xlsx")
+        staged.export_xlsx(path)
+
+        stages, changes = import_staged_xlsx(path)
+        self.assertFalse(stages["Feb 2026"].is_new)
+
+    def test_commit_creates_sheet_for_new(self):
+        """Commit creates sheet from template when is_new=True."""
+        from unittest.mock import MagicMock
+
+        staged = StagedPipelineResult()
+        stage = staged.get_or_create_stage("April", 2026)
+        stage.is_new = True
+        stage.new_expenses = [
+            ["Shop", "", "", "100.00", "סופר", "04/01/2026", "CC"],
+        ]
+        stage.expense_start_row = 2
+
+        handler = MagicMock()
+        handler.create_sheet_from_template.return_value = True
+        handler.write_expense_rows.return_value = True
+        handler.find_section_marker.return_value = 131
+        handler.batch_update_cells.return_value = True
+
+        staged.commit(handler)
+        handler.create_sheet_from_template.assert_called_once_with("April")
+
+    def test_commit_writes_carryover(self):
+        """Commit writes carryover updates before data."""
+        from unittest.mock import MagicMock, call
+
+        staged = StagedPipelineResult()
+        stage = staged.get_or_create_stage("February", 2026)
+        stage.is_new = True
+        stage.carryover_updates = [
+            ("E133", "=MAX('January'!B133,0)"),
+            ("F161", "='January'!C161"),
+        ]
+        stage.new_expenses = [
+            ["Shop", "", "", "100.00", "סופר", "02/01/2026", "CC"],
+        ]
+        stage.expense_start_row = 2
+
+        handler = MagicMock()
+        handler.create_sheet_from_template.return_value = True
+        handler.write_expense_rows.return_value = True
+        handler.find_section_marker.return_value = 131
+        handler.batch_update_cells.return_value = True
+
+        staged.commit(handler)
+
+        # Carryover updates should be written
+        handler.batch_update_cells.assert_any_call(
+            "February", stage.carryover_updates
+        )
+
+    def test_commit_writes_carryover_for_existing_month(self):
+        """Carryover updates are written even when is_new=False."""
+        from unittest.mock import MagicMock
+
+        staged = StagedPipelineResult()
+        stage = staged.get_or_create_stage("January", 2026)
+        stage.is_new = False
+        stage.carryover_updates = [
+            ("E134", 10188.86),
+            ("F161", 5212.61),
+            ("D132", 55101.58),
+        ]
+        stage.new_expenses = [
+            ["Shop", "", "", "100.00", "סופר", "01/01/2026", "CC"],
+        ]
+        stage.expense_start_row = 2
+
+        handler = MagicMock()
+        handler.write_expense_rows.return_value = True
+        handler.find_section_marker.return_value = 131
+        handler.batch_update_cells.return_value = True
+
+        staged.commit(handler)
+
+        # Should NOT create sheet (is_new=False)
+        handler.create_sheet_from_template.assert_not_called()
+        # But SHOULD write carryover
+        handler.batch_update_cells.assert_any_call(
+            "January", stage.carryover_updates
+        )
+
+    def test_carryover_updates_round_trip(self):
+        """carryover_updates survive export -> import round-trip."""
+        staged = StagedPipelineResult()
+        stage = staged.get_or_create_stage("January", 2026)
+        stage.is_new = False
+        stage.carryover_updates = [
+            ("E134", 10188.86),
+            ("F161", 5212.61),
+            ("D132", 55101.58),
+        ]
+        stage.new_expenses = [
+            ["Shop", "", "", "100.00", "סופר", "01/01/2026", "CC"],
+        ]
+        stage.expense_meta = [
+            RowMeta(orig_category="סופר", orig_subcategory=""),
+        ]
+
+        path = os.path.join(tempfile.mkdtemp(), "test.xlsx")
+        staged.export_xlsx(path)
+
+        stages, changes = import_staged_xlsx(path)
+        imported = stages["Jan 2026"]
+        self.assertEqual(len(imported.carryover_updates), 3)
+        refs = [ref for ref, val in imported.carryover_updates]
+        self.assertIn("E134", refs)
+        self.assertIn("F161", refs)
+        self.assertIn("D132", refs)
+        # Verify numeric values preserved
+        val_map = {ref: val for ref, val in imported.carryover_updates}
+        self.assertAlmostEqual(val_map["E134"], 10188.86)
+
+    def test_carryover_formulas_round_trip(self):
+        """Formula carryover_updates survive round-trip."""
+        staged = StagedPipelineResult()
+        stage = staged.get_or_create_stage("February", 2026)
+        stage.is_new = True
+        stage.carryover_updates = [
+            ("E134", "=MAX('January'!B134,0)"),
+            ("F161", "='January'!C161"),
+        ]
+        stage.new_expenses = [
+            ["Shop", "", "", "50.00", "סופר", "02/01/2026", "CC"],
+        ]
+        stage.expense_meta = [
+            RowMeta(orig_category="סופר", orig_subcategory=""),
+        ]
+
+        path = os.path.join(tempfile.mkdtemp(), "test.xlsx")
+        staged.export_xlsx(path)
+
+        stages, changes = import_staged_xlsx(path)
+        imported = stages["Feb 2026"]
+        self.assertEqual(len(imported.carryover_updates), 2)
+        val_map = {ref: val for ref, val in imported.carryover_updates}
+        self.assertIn("=MAX('January'!B134,0)", val_map["E134"])
+
+
 if __name__ == "__main__":
     unittest.main()

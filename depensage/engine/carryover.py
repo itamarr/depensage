@@ -1,12 +1,18 @@
 """
 Month-to-month carryover logic.
 
-Reads budget remaining and savings totals from a source month,
-writes accumulated values to the destination month.
-All writes are batched to minimize API calls.
+Two entry points:
+- compute_carryover(): Pure computation from VirtualMonth objects.
+  Returns updates to write at commit time + in-memory values.
+- run_carryover(): Direct read-and-write for the manual CLI command.
 """
 
 import logging
+from dataclasses import dataclass, field
+
+from depensage.engine.virtual_month import (
+    VirtualMonth, compute_budget_remaining, compute_savings_total,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -297,6 +303,163 @@ def _collect_savings_budget_update(handler, sheet_name, income_total):
     )
 
     return (f"D{savings_row}", savings_budget)
+
+
+@dataclass
+class CarryoverResult:
+    """Result of compute_carryover: updates to write + in-memory values."""
+    # Cell updates for commit (cell_ref, formula_or_value)
+    budget_updates: list[tuple] = field(default_factory=list)
+    savings_updates: list[tuple] = field(default_factory=list)
+    savings_budget_update: tuple | None = None
+    # In-memory values for populating the dest VirtualMonth
+    budget_accumulated: dict[int, float] = field(default_factory=dict)
+    savings_accumulated: dict[int, float] = field(default_factory=dict)
+    savings_budget: float | None = None
+    income_total: float | None = None
+
+
+def compute_carryover(source_vm, dest_vm, same_spreadsheet):
+    """Pure carryover computation from VirtualMonth objects.
+
+    For same_spreadsheet: generates formulas (='Jan'!B15) for commit.
+    For cross-year: generates static float values for commit.
+    Both cases also return computed values for in-memory VM population.
+
+    Args:
+        source_vm: Source month VirtualMonth.
+        dest_vm: Destination month VirtualMonth.
+        same_spreadsheet: True if both months are in the same spreadsheet.
+
+    Returns:
+        CarryoverResult with updates and in-memory values.
+    """
+    logger.info(
+        f"Computing carryover: {source_vm.month} -> {dest_vm.month}"
+    )
+
+    budget_updates = []
+    budget_accumulated = {}
+
+    # 1. Budget carry
+    if same_spreadsheet:
+        for dest_line in dest_vm.budget_lines:
+            if not dest_line.carry_flag:
+                continue
+            row = dest_line.row_number
+            formula = f"=MAX('{source_vm.month}'!B{row},0)"
+            budget_updates.append((f"E{row}", formula))
+
+            # Compute in-memory value from source.
+            # Use line.remaining directly — it reflects the current state
+            # including any updates from _update_vm_after_staging.
+            for src_line in source_vm.budget_lines:
+                if src_line.row_number == row:
+                    budget_accumulated[row] = max(src_line.remaining, 0)
+                    break
+    else:
+        # Cross-year: match by (category, subcategory)
+        carry_lookup = {}
+        for src_line in source_vm.budget_lines:
+            if not src_line.carry_flag:
+                continue
+            remaining = src_line.remaining
+            if remaining > 0:
+                key = (src_line.category, src_line.subcategory)
+                carry_lookup[key] = remaining
+
+        for dest_line in dest_vm.budget_lines:
+            if not dest_line.carry_flag:
+                continue
+            key = (dest_line.category, dest_line.subcategory)
+            if key in carry_lookup:
+                row = dest_line.row_number
+                budget_updates.append((f"E{row}", carry_lookup[key]))
+                budget_accumulated[row] = carry_lookup[key]
+
+    logger.info(f"Budget carry: {len(budget_updates)} lines")
+
+    # 2. Savings carry
+    savings_updates = []
+    savings_accumulated = {}
+
+    if same_spreadsheet:
+        for dest_line in dest_vm.savings_lines:
+            row = dest_line.row_number
+            formula = f"='{source_vm.month}'!C{row}"
+            savings_updates.append((f"F{row}", formula))
+
+            # Compute in-memory value from source
+            for src_line in source_vm.savings_lines:
+                if src_line.row_number == row:
+                    savings_accumulated[row] = compute_savings_total(src_line)
+                    break
+    else:
+        # Cross-year: match by goal name
+        totals_lookup = {}
+        for src_line in source_vm.savings_lines:
+            totals_lookup[src_line.goal_name] = compute_savings_total(src_line)
+
+        for dest_line in dest_vm.savings_lines:
+            if dest_line.goal_name in totals_lookup:
+                val = totals_lookup[dest_line.goal_name]
+                row = dest_line.row_number
+                savings_updates.append((f"F{row}", val))
+                savings_accumulated[row] = val
+
+    logger.info(f"Savings carry: {len(savings_updates)} lines")
+
+    # 3. Income total and savings budget
+    income_total = source_vm.income_total
+    if income_total is None:
+        income_total = 0.0
+
+    savings_budget_update = None
+    savings_budget = None
+
+    if income_total and income_total > 0:
+        other_budgets_sum = sum(
+            line.budget_amount for line in dest_vm.budget_lines
+            if line.category != "חסכון"
+        )
+        savings_budget = income_total - other_budgets_sum
+        if dest_vm.savings_budget_row:
+            savings_budget_update = (
+                f"D{dest_vm.savings_budget_row}", savings_budget
+            )
+        logger.info(
+            f"Savings budget: {income_total:,.2f} - {other_budgets_sum:,.2f}"
+            f" = {savings_budget:,.2f}"
+        )
+
+    return CarryoverResult(
+        budget_updates=budget_updates,
+        savings_updates=savings_updates,
+        savings_budget_update=savings_budget_update,
+        budget_accumulated=budget_accumulated,
+        savings_accumulated=savings_accumulated,
+        savings_budget=savings_budget,
+        income_total=income_total,
+    )
+
+
+def apply_carryover_to_vm(dest_vm, result):
+    """Apply computed carryover values to the destination VirtualMonth.
+
+    Sets accumulated values on budget and savings lines, and
+    updates the savings budget value.
+    """
+    for line in dest_vm.budget_lines:
+        if line.row_number in result.budget_accumulated:
+            line.accumulated = result.budget_accumulated[line.row_number]
+            line.remaining = compute_budget_remaining(line)
+
+    for line in dest_vm.savings_lines:
+        if line.row_number in result.savings_accumulated:
+            line.accumulated = result.savings_accumulated[line.row_number]
+
+    if result.savings_budget is not None:
+        dest_vm.savings_budget_value = result.savings_budget
 
 
 def run_carryover(source_handler, source_month, dest_handler, dest_month):

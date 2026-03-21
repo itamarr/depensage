@@ -121,7 +121,10 @@ def _get_categories_with_subcats(handlers):
 
 
 def _import_and_derive_coordinates(xlsx_path, handlers):
-    """Import a staged XLSX and re-derive write coordinates from the live sheet.
+    """Import a staged XLSX and re-derive write coordinates.
+
+    For existing months, coordinates come from the live sheet.
+    For new months (is_new=True), coordinates come from the template.
 
     Returns (staged_result, changes) or None on failure.
     """
@@ -143,11 +146,17 @@ def _import_and_derive_coordinates(xlsx_path, handlers):
     for ws_name, stage in stages.items():
         handler = get_h(stage.year)
 
+        # For new months, derive from template; for existing, from live sheet
+        source_sheet = "Month Template" if stage.is_new else stage.month
+
         if stage.new_expenses:
-            first_empty = handler.find_first_empty_expense_row(stage.month)
-            marker_row = handler.find_section_marker(stage.month, "budget")
+            if stage.is_new:
+                first_empty = 2  # template starts at row 2
+            else:
+                first_empty = handler.find_first_empty_expense_row(stage.month)
+            marker_row = handler.find_section_marker(source_sheet, "budget")
             if marker_row is None:
-                print(f"Warning: No budget marker in {stage.month}, skipping expenses")
+                print(f"Warning: No budget marker in {source_sheet}, skipping expenses")
                 stage.new_expenses = []
                 continue
             rows_needed = len(stage.new_expenses)
@@ -158,14 +167,22 @@ def _import_and_derive_coordinates(xlsx_path, handlers):
             stage.expense_insert_needed = insert_needed
 
         if stage.new_income:
-            first_empty = handler.find_first_empty_income_row(stage.month)
+            if stage.is_new:
+                income_marker = handler.find_section_marker(
+                    source_sheet, "income"
+                )
+                first_empty = (income_marker + 3) if income_marker else None
+            else:
+                first_empty = handler.find_first_empty_income_row(stage.month)
             if first_empty is None:
-                print(f"Warning: No income insertion point in {stage.month}")
+                print(f"Warning: No income insertion point in {source_sheet}")
                 stage.new_income = []
                 continue
-            savings_marker = handler.find_section_marker(stage.month, "savings")
+            savings_marker = handler.find_section_marker(
+                source_sheet, "savings"
+            )
             if savings_marker is None:
-                print(f"Warning: No savings marker in {stage.month}")
+                print(f"Warning: No savings marker in {source_sheet}")
                 stage.new_income = []
                 continue
             last_income_data = savings_marker - 3

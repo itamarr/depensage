@@ -54,6 +54,8 @@ class MonthStage:
     bank_balance: float | None = None  # closing bank balance for E175
     savings_allocations: list = field(default_factory=list)  # SavingsAllocation list
     savings_warning: str | None = None
+    is_new: bool = False  # True if month sheet needs creation at commit
+    carryover_updates: list[tuple] = field(default_factory=list)  # (cell_ref, formula_or_value)
 
 
 def _month_order(month_name):
@@ -118,6 +120,10 @@ class StagedPipelineResult:
                 parts.append(f"bank balance: {stage.bank_balance:,.2f}")
             if stage.savings_allocations:
                 parts.append(f"{len(stage.savings_allocations)} savings allocations")
+            if stage.carryover_updates:
+                parts.append(f"{len(stage.carryover_updates)} carryover updates")
+            if stage.is_new:
+                parts.append("NEW sheet")
             if parts:
                 lines.append(f"  {stage.month} {stage.year}: {', '.join(parts)}")
             if stage.savings_warning:
@@ -149,6 +155,7 @@ class StagedPipelineResult:
             stage.new_expenses or stage.new_income
             or stage.bank_balance is not None
             or stage.savings_allocations
+            or stage.carryover_updates
             for stage in self.month_stages.values()
         )
 
@@ -295,6 +302,16 @@ class StagedPipelineResult:
                 meta_ws.append([ws_name, "income", i, meta.orig_category, meta.orig_subcategory])
             for i, alloc in enumerate(stage.savings_allocations):
                 meta_ws.append([ws_name, "savings", i, alloc.goal_name, alloc.row_number])
+            if stage.is_new:
+                meta_ws.append([ws_name, "is_new", 0, "", ""])
+            for i, (ref, val) in enumerate(stage.carryover_updates):
+                # Escape formulas so openpyxl doesn't interpret them.
+                # Without this, ='January'!C159 gets mangled to
+                # =[1]January!C159 (external workbook reference) because
+                # the XLSX file has no sheet named "January".
+                if isinstance(val, str) and val.startswith("="):
+                    val = "FORMULA:" + val[1:]
+                meta_ws.append([ws_name, "carryover", i, ref, val])
 
         wb.save(path)
         return path
@@ -327,7 +344,24 @@ class StagedPipelineResult:
             written = 0
             income_written = 0
 
-            # Write expenses
+            # 1. Create sheet from template if new
+            if stage.is_new:
+                success = handler.create_sheet_from_template(stage.month)
+                if not success:
+                    logger.error(
+                        f"Failed to create sheet '{stage.month}', skipping"
+                    )
+                    continue
+
+            # 2. Write carryover formulas/values
+            if stage.carryover_updates:
+                handler.batch_update_cells(stage.month, stage.carryover_updates)
+                logger.info(
+                    f"Wrote {len(stage.carryover_updates)} carryover "
+                    f"updates to {stage.month}"
+                )
+
+            # 3. Write expenses
             if stage.new_expenses:
                 if stage.expense_insert_needed > 0:
                     marker = handler.find_section_marker(stage.month, "budget")
@@ -431,9 +465,26 @@ def import_staged_xlsx(path):
     # Group by (month, row_type)
     meta_by_key = {}
     savings_meta_by_month = {}  # {ws_name: [(goal_name, row_number), ...]}
+    new_months = set()  # ws_names that are new (need sheet creation)
+    carryover_by_month = {}  # {ws_name: [(cell_ref, value), ...]}
     for row in meta_rows:
         month, row_type, row_index, orig_cat, orig_sub = row
-        if row_type == "savings":
+        if row_type == "is_new":
+            new_months.add(month)
+        elif row_type == "carryover":
+            # orig_cat = cell_ref, orig_sub = value (float or formula string)
+            ref = _cell_str(orig_cat)
+            val = orig_sub
+            # Unescape formulas that were escaped during export
+            if isinstance(val, str) and val.startswith("FORMULA:"):
+                val = "=" + val[8:]
+            elif val is not None:
+                try:
+                    val = float(val)
+                except (ValueError, TypeError):
+                    pass
+            carryover_by_month.setdefault(month, []).append((ref, val))
+        elif row_type == "savings":
             savings_meta_by_month.setdefault(month, []).append(
                 (_cell_str(orig_cat), orig_sub)  # goal_name, row_number
             )
@@ -474,7 +525,10 @@ def import_staged_xlsx(path):
         month_name = month_abbrevs.get(parts[0], parts[0])
         year = int(parts[1]) if len(parts) > 1 else 0
 
-        stage = MonthStage(month=month_name, year=year)
+        stage = MonthStage(
+            month=month_name, year=year, is_new=(ws_name in new_months),
+            carryover_updates=carryover_by_month.get(ws_name, []),
+        )
 
         i = 0
         # Find and read expenses

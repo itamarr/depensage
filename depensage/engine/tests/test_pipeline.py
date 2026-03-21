@@ -46,20 +46,29 @@ def _write_bank_excel(data_rows):
     return f.name
 
 
+def _setup_handler_mock(handler, sheet_exists=True):
+    """Configure a mock handler with defaults for VM loading."""
+    handler.sheet_exists.return_value = sheet_exists
+    handler.find_section_marker.return_value = 131
+    handler.read_expense_rows.return_value = []
+    handler.read_income_rows.return_value = []
+    handler.find_first_empty_expense_row.return_value = 2
+    handler.find_first_empty_income_row.return_value = 140
+    handler.read_section_range.return_value = (None, [])
+    handler.insert_rows.return_value = True
+    handler.write_expense_rows.return_value = True
+    handler.write_income_rows.return_value = True
+    handler.batch_update_cells.return_value = True
+    handler.create_sheet_from_template.return_value = True
+
+
 class TestPipeline(unittest.TestCase):
 
     def setUp(self):
         self.handler = MagicMock()
         self.classifier = MagicMock()
         self.temp_files = []
-
-        # Default handler behavior
-        self.handler.get_or_create_month_sheet.return_value = "February"
-        self.handler.find_section_marker.return_value = 131
-        self.handler.read_expense_rows.return_value = []
-        self.handler.find_first_empty_expense_row.return_value = 2
-        self.handler.insert_rows.return_value = True
-        self.handler.write_expense_rows.return_value = True
+        _setup_handler_mock(self.handler)
 
     def tearDown(self):
         for f in self.temp_files:
@@ -168,9 +177,10 @@ class TestPipeline(unittest.TestCase):
         ])
         self._setup_classifier_all_classified()
         self.handler.find_section_marker.return_value = None
+        # read_section_range returns (None, []) so budget_marker_row = 0
         with self.assertRaises(ValueError) as ctx:
             run_pipeline([path], self.handler, self.classifier)
-        self.assertIn("marker", str(ctx.exception).lower())
+        self.assertIn("budget", str(ctx.exception).lower())
 
     def test_row_insertion_when_full(self):
         path = self._excel([
@@ -206,7 +216,6 @@ class TestPipeline(unittest.TestCase):
             ["02/05/2024", "Shop B", 50.75],
         ])
         self._setup_classifier_all_classified()
-        self.handler.get_or_create_month_sheet.side_effect = lambda d: d.strftime("%B")
         staged = run_pipeline([path], self.handler, self.classifier)
         result = staged.commit(self.handler)
         self.assertEqual(len(result.months), 2)
@@ -229,7 +238,6 @@ class TestPipeline(unittest.TestCase):
             ["01/05/2026", "Shop B", 50.75],
         ])
         self._setup_classifier_all_classified()
-        self.handler.get_or_create_month_sheet.side_effect = lambda d: d.strftime("%B")
         staged = run_pipeline([path], self.handler, self.classifier, year=2026)
         result = staged.commit(self.handler)
         self.assertEqual(result.total_parsed, 2)
@@ -259,18 +267,10 @@ class TestPipeline(unittest.TestCase):
         self._setup_classifier_all_classified()
 
         handler_2025 = MagicMock()
-        handler_2025.get_or_create_month_sheet.return_value = "December"
-        handler_2025.find_section_marker.return_value = 131
-        handler_2025.read_expense_rows.return_value = []
-        handler_2025.find_first_empty_expense_row.return_value = 2
-        handler_2025.write_expense_rows.return_value = True
+        _setup_handler_mock(handler_2025)
 
         handler_2026 = MagicMock()
-        handler_2026.get_or_create_month_sheet.return_value = "January"
-        handler_2026.find_section_marker.return_value = 131
-        handler_2026.read_expense_rows.return_value = []
-        handler_2026.find_first_empty_expense_row.return_value = 2
-        handler_2026.write_expense_rows.return_value = True
+        _setup_handler_mock(handler_2026)
 
         handlers = {2025: handler_2025, 2026: handler_2026}
         staged = run_pipeline([path], handlers, self.classifier)
@@ -293,6 +293,78 @@ class TestPipeline(unittest.TestCase):
             run_pipeline([path], handlers, self.classifier)
         self.assertIn("2026", str(ctx.exception))
 
+    def test_new_month_gets_is_new_flag(self):
+        """Stages for new months have is_new=True."""
+        path = self._excel([
+            ["02/01/2024", "Shop A", 100.50],
+        ])
+        self._setup_classifier_all_classified()
+        self.handler.sheet_exists.return_value = False
+        staged = run_pipeline([path], self.handler, self.classifier)
+        stages = staged.sorted_stages()
+        self.assertTrue(stages[0].is_new)
+
+    def test_existing_month_not_is_new(self):
+        """Stages for existing months have is_new=False."""
+        path = self._excel([
+            ["02/01/2024", "Shop A", 100.50],
+        ])
+        self._setup_classifier_all_classified()
+        self.handler.sheet_exists.return_value = True
+        staged = run_pipeline([path], self.handler, self.classifier)
+        stages = staged.sorted_stages()
+        self.assertFalse(stages[0].is_new)
+
+    def test_commit_creates_sheet_for_new_month(self):
+        """Commit creates the sheet from template for new months."""
+        path = self._excel([
+            ["02/01/2024", "Shop A", 100.50],
+        ])
+        self._setup_classifier_all_classified()
+        self.handler.sheet_exists.return_value = False
+        staged = run_pipeline([path], self.handler, self.classifier)
+        staged.commit(self.handler)
+        self.handler.create_sheet_from_template.assert_called_once_with(
+            "February"
+        )
+
+
+    def test_existing_month_with_empty_accumulated_gets_carryover(self):
+        """Existing sheets with no carryover data still get carryover applied."""
+        path = self._excel([
+            ["02/01/2024", "Shop A", 100.50],
+        ])
+        self._setup_classifier_all_classified()
+        self.handler.sheet_exists.return_value = True
+
+        # Budget section with a CARRY line that has accumulated=0
+        budget_rows = [
+            [500, 0, 2000, 0, "", "סופר", ""],
+            [100, 0, 500, 0, "תת", "שונות", "CARRY"],
+        ]
+        # Previous month (January) has remaining=200 for the CARRY line
+        prev_budget_rows = [
+            [500, 0, 2000, 0, "", "סופר", ""],
+            [200, 0, 500, 0, "תת", "שונות", "CARRY"],
+        ]
+
+        def section_range(sheet, section, columns, end_section=None):
+            if section == "budget" and columns == "B:H":
+                if sheet == "January":
+                    return (131, prev_budget_rows)
+                return (131, budget_rows)
+            return (None, [])
+
+        self.handler.read_section_range.side_effect = section_range
+
+        staged = run_pipeline([path], self.handler, self.classifier)
+
+        # Carryover should have generated updates for February
+        stages = staged.sorted_stages()
+        feb_stage = [s for s in stages if s.month == "February"][0]
+        self.assertFalse(feb_stage.is_new)  # sheet exists
+        self.assertTrue(len(feb_stage.carryover_updates) > 0)
+
 
 class TestPipelineBankTransactions(unittest.TestCase):
     """Test pipeline handling of bank transcript files."""
@@ -304,17 +376,22 @@ class TestPipelineBankTransactions(unittest.TestCase):
         self.income_classifier = MagicMock()
         self.temp_files = []
 
-        # Default handler behavior
-        self.handler.get_or_create_month_sheet.return_value = "January"
-        self.handler.sheet_exists.return_value = False  # no prev month
-        self.handler.find_section_marker.return_value = 131
-        self.handler.read_expense_rows.return_value = []
-        self.handler.read_income_rows.return_value = []
-        self.handler.find_first_empty_expense_row.return_value = 2
-        self.handler.find_first_empty_income_row.return_value = 140
-        self.handler.insert_rows.return_value = True
-        self.handler.write_expense_rows.return_value = True
-        self.handler.write_income_rows.return_value = True
+        _setup_handler_mock(self.handler)
+        # Default: sheets don't exist (bank tests often involve new months)
+        self.handler.sheet_exists.return_value = False
+
+        # Savings marker for income section
+        def section_marker(sheet, section):
+            if section == "budget":
+                return 131
+            if section == "savings":
+                return 160
+            if section == "income":
+                return 135
+            if section == "reconciliation":
+                return 180
+            return None
+        self.handler.find_section_marker.side_effect = section_marker
 
         # CC classifier (no CC files in these tests)
         self.classifier.classify.return_value = ClassificationResult(
@@ -358,11 +435,6 @@ class TestPipelineBankTransactions(unittest.TestCase):
         self._setup_bank_classifier_all()
         self._setup_income_classifier_all()
 
-        # savings marker for income section
-        self.handler.find_section_marker.side_effect = (
-            lambda sheet, section: 131 if section == "budget" else 160
-        )
-
         staged = run_pipeline(
             [path], self.handler, self.classifier, year=2026,
             bank_classifier=self.bank_classifier,
@@ -390,11 +462,6 @@ class TestPipelineBankTransactions(unittest.TestCase):
         self._setup_bank_classifier_all()
         self._setup_income_classifier_all()
 
-        self.handler.sheet_exists.return_value = True
-        self.handler.find_section_marker.side_effect = (
-            lambda sheet, section: 131 if section == "budget" else 160
-        )
-
         staged = run_pipeline(
             [path], self.handler, self.classifier, year=2026,
             bank_classifier=self.bank_classifier,
@@ -416,10 +483,6 @@ class TestPipelineBankTransactions(unittest.TestCase):
         ])
         self._setup_bank_classifier_all()
         self._setup_income_classifier_all()
-
-        self.handler.find_section_marker.side_effect = (
-            lambda sheet, section: 131 if section == "budget" else 160
-        )
 
         staged = run_pipeline(
             [path], self.handler, self.classifier, year=2026,
@@ -458,10 +521,6 @@ class TestPipelineBankTransactions(unittest.TestCase):
         self._setup_bank_classifier_all()
         self._setup_income_classifier_all()
 
-        self.handler.find_section_marker.side_effect = (
-            lambda sheet, section: 131 if section == "budget" else 160
-        )
-
         staged = run_pipeline(
             [cc_path, bank_path], self.handler, self.classifier, year=2026,
             bank_classifier=self.bank_classifier,
@@ -483,9 +542,6 @@ class TestPipelineBankTransactions(unittest.TestCase):
         self._setup_income_classifier_all()
 
         self.handler.sheet_exists.return_value = True
-        self.handler.find_section_marker.side_effect = (
-            lambda sheet, section: 131 if section == "budget" else 160
-        )
         # Existing income row matches
         self.handler.read_income_rows.return_value = [
             ["חברה א", "25000.00", "משכורת", "01/01/2026"],
@@ -508,10 +564,6 @@ class TestPipelineBankTransactions(unittest.TestCase):
             ["01/01/2026", "קופת חולים", "", "123", 300, "", 5000, "", "", ""],
         ])
 
-        self.handler.find_section_marker.side_effect = (
-            lambda sheet, section: 131 if section == "budget" else 160
-        )
-
         staged = run_pipeline(
             [path], self.handler, self.classifier, year=2026,
         )
@@ -531,11 +583,6 @@ class TestPipelineBankTransactions(unittest.TestCase):
         self._setup_bank_classifier_all()
         self._setup_income_classifier_all()
 
-        self.handler.sheet_exists.return_value = True
-        self.handler.find_section_marker.side_effect = (
-            lambda sheet, section: 131 if section == "budget" else 160
-        )
-
         staged = run_pipeline(
             [path], self.handler, self.classifier, year=2026,
             bank_classifier=self.bank_classifier,
@@ -554,10 +601,6 @@ class TestPipelineBankTransactions(unittest.TestCase):
         self._setup_bank_classifier_all()
         self._setup_income_classifier_all()
 
-        self.handler.sheet_exists.return_value = True
-        self.handler.find_section_marker.side_effect = (
-            lambda sheet, section: 131 if section == "budget" else 160
-        )
         self.handler.find_reconciliation_label_row.return_value = 175
         self.handler.update_cell.return_value = True
 
@@ -571,7 +614,7 @@ class TestPipelineBankTransactions(unittest.TestCase):
         self.handler.find_reconciliation_label_row.assert_called_once_with(
             "January", 'כסף בעו"ש'
         )
-        self.handler.batch_update_cells.assert_called_once_with(
+        self.handler.batch_update_cells.assert_called_with(
             "January", [("E175", 20000.0)]
         )
 
@@ -583,10 +626,6 @@ class TestPipelineBankTransactions(unittest.TestCase):
         self._setup_bank_classifier_all()
         self._setup_income_classifier_all()
 
-        self.handler.sheet_exists.return_value = True
-        self.handler.find_section_marker.side_effect = (
-            lambda sheet, section: 131 if section == "budget" else 160
-        )
         self.handler.find_reconciliation_label_row.return_value = None
         self.handler.update_cell.return_value = True
 
