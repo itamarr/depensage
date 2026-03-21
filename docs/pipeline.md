@@ -2,17 +2,42 @@
 
 ## Automated Pipeline
 
-`engine/pipeline.py` → `run_pipeline()` orchestrates the full flow:
+`engine/pipeline.py` → `run_pipeline()` orchestrates the full flow using in-memory `VirtualMonth` objects. **Zero writes to Google Sheets during staging** — the API is used only for reads. All writes happen at commit time.
 
-1. Parse Excel CC statements (`StatementParser`)
-2. Filter pending transactions (no charge date = still on credit card)
-3. Classify via `LookupClassifier` (exact + prefix pattern matching)
-4. Deduplicate against existing sheet data (`engine/dedup.py`)
-5. Format rows for columns B–G (`engine/formatter.py`)
-6. Insert rows if expense section is full, write to correct monthly sheet
-7. When creating a new month sheet, run carryover from the previous month (`engine/carryover.py`)
+### Sequential Per-Month Processing
 
-The pipeline supports multiple spreadsheets (one per year) and an optional `--year` filter. Without `--year`, transactions are routed to the appropriate year's spreadsheet automatically.
+Months are processed in chronological order, each fully finalized before the next starts:
+
+1. **Parse** all input files (CC statements + bank transcripts, auto-detected)
+2. **Classify** transactions (CC, bank expenses, income)
+3. **For each month** (chronological):
+   a. **Load VirtualMonth** — from existing sheet (read-only) or template (for new months)
+   b. **Carryover** — if accumulated columns are empty, compute from previous month's VM
+   c. **Dedup + stage expenses** — against VM's existing data
+   d. **Dedup + stage income** — against VM's existing data
+   e. **Update VM** — add staged expenses/income so next month sees accurate data
+   f. **Stage bank balance** — from bank transcript
+   g. **Stage savings allocation** — using post-carryover savings budget
+4. **Return StagedPipelineResult** — caller can inspect, export XLSX, and commit
+
+### VirtualMonth (`engine/virtual_month.py`)
+
+In-memory representation of a month sheet, with Python equivalents of spreadsheet formulas:
+
+- `load_from_sheet(handler, month, year)` — reads existing sheet data
+- `load_from_template(handler, month, year)` — reads template structure, marks `is_new=True`
+- `BudgetLine` / `SavingsLine` dataclasses hold section data
+- `compute_budget_remaining()`, `compute_savings_total()`, `compute_income_total()` — replace spreadsheet SUMIF/arithmetic
+
+### Commit Flow (`staging.py`)
+
+For each month (chronological):
+1. **Create sheet** from template (if `is_new`)
+2. **Write carryover** formulas/values (budget accumulated, savings accumulated, savings budget)
+3. **Insert rows** if expense/income sections are full
+4. **Write expenses** (B:H)
+5. **Write income** (D:G)
+6. **Batch write** savings allocations + bank balance
 
 ## Classification: Lookup Table + Human Review
 
@@ -22,15 +47,30 @@ The pipeline supports multiple spreadsheets (one per year) and an optional `--ye
 
 ## Month-to-Month Carryover
 
-`engine/carryover.py` runs automatically when the pipeline creates a new month sheet. It can also be triggered manually via the `carryover` CLI command.
+`engine/carryover.py` provides two entry points:
+- `compute_carryover(source_vm, dest_vm, same_spreadsheet)` — pure computation from VirtualMonth objects (used by pipeline)
+- `run_carryover(source_handler, source_month, dest_handler, dest_month)` — direct read-and-write (used by manual `carryover` CLI command)
 
 ### What carries over (source → destination):
 - **Budget accumulated**: For CARRY-flagged lines only, positive remaining (surplus) from source → Accumulated (E) column in destination. Debts do NOT carry — they're handled by the surplus/deficit formula.
-- **Savings accumulated**: Total (C) from each savings goal in source → Accumulated (F) in destination. Matched by goal name in column G; only goals present in destination get values.
+- **Savings accumulated**: Total (C) from each savings goal in source → Accumulated (F) in destination. Matched by goal name (cross-year) or row number (same-spreadsheet).
 - **Savings budget line**: The חסכון budget line in destination is set so that total budget = source month's income total. Formula: `savings_budget = income_total - sum(all other budget D values)`.
 
-### Cross-year carryover:
-January needs December from the previous year's spreadsheet. `get_previous_month("January")` returns `("December", -1)` where `-1` is the year offset. The pipeline resolves the correct handler from the handler dict.
+### Same-spreadsheet vs. cross-year:
+- **Same spreadsheet** (e.g., Jan → Feb): writes formulas (`=MAX('January'!B134,0)`) so values update live
+- **Cross-year** (e.g., Dec 2025 → Jan 2026): writes static values matched by (category, subcategory) for budget, by goal name for savings
+
+### Carryover detection:
+The pipeline runs carryover for any month where accumulated columns are all empty — whether the sheet is new or was created manually. This is checked by `_needs_carryover(vm)`.
+
+## Savings Allocation
+
+`engine/savings_allocator.py` → `allocate_savings()` is a pure function:
+- **Good month** (budget ≥ presets): keep presets, adjust בלת"ם, surplus → default goal
+- **Tight month** (0 < budget < presets): keep presets, warn user
+- **Bad month** (budget ≤ 0): zero all allocations, warn user
+
+The pipeline reads savings budget and goals from the VirtualMonth (post-carryover), so allocations reflect the correct savings budget.
 
 ## Deduplication
 
@@ -42,8 +82,8 @@ January needs December from the previous year's spreadsheet. `get_previous_month
 
 ## Modules
 
-- **`engine/`** — `StatementParser` (Excel only), `pipeline.py` (orchestrator), `dedup.py`, `formatter.py`, `carryover.py`
-- **`classifier/`** — `LookupClassifier` with exact matches and prefix patterns, persisted to `.artifacts/lookup.json`
-- **`sheets/`** — `SheetHandler` (Google Sheets API: auth, read, write, metadata, row insertion, marker detection). `cli.py` is the CLI.
-- **`config/`** — Settings loaded from `.secrets/config.json`. Config maps years to spreadsheet IDs: `{"spreadsheets": {"2025": "id1", "2026": "id2"}, "credentials_file": "..."}`
+- **`engine/`** — `virtual_month.py` (in-memory month), `pipeline.py` (sequential orchestrator), `carryover.py` (compute + apply), `savings_allocator.py`, `staging.py` (MonthStage + XLSX export/import), `dedup.py`, `formatter.py`, `statement_parser.py`, `bank_parser.py`, `verification.py`
+- **`classifier/`** — `LookupClassifier` with exact matches and prefix patterns, persisted to `.artifacts/lookup.json`. Bank and income classifiers with same pattern.
+- **`sheets/`** — `SheetHandler` (Google Sheets API: auth, read, write, metadata, row insertion, marker detection). `cli.py` + `cli_commands.py` for the CLI.
+- **`config/`** — Settings loaded from `.secrets/config.json`. Config maps keys to spreadsheet IDs: `{"spreadsheets": {"2025": {...}, "2026_dev": {...}}, "credentials_file": "...", "default_savings_goal": "דירה"}`
 - **`scripts/`** — One-time migration scripts

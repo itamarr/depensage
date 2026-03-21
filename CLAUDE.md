@@ -49,7 +49,9 @@ Override defaults with `--spreadsheet-id`, `--credentials`, and `-s/--spreadshee
 
 **3-layer design**: core library (no I/O, no prompts) → CLI (dev/testing) → web app (end product). All business logic in core modules; CLI and web app are thin wrappers.
 
-**Modules**: `engine/` (parser, bank_parser, pipeline, dedup, formatter, carryover, verification), `classifier/` (lookup-based: CC, bank, income), `sheets/` (Google Sheets API + CLI), `config/` (settings), `scripts/` (migrations).
+**Modules**: `engine/` (virtual_month, pipeline, carryover, savings_allocator, staging, parser, bank_parser, dedup, formatter, verification), `classifier/` (lookup-based: CC, bank, income), `sheets/` (Google Sheets API + CLI), `config/` (settings), `scripts/` (migrations).
+
+**Pipeline flow**: Sequential per-month processing via in-memory `VirtualMonth` objects. Zero writes during staging — all reads from Google Sheets, all writes at commit. Each month finalized (carryover → expenses → income → VM update → savings) before the next starts.
 
 ## Key Conventions
 
