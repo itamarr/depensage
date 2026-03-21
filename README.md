@@ -8,18 +8,22 @@
 
 ## Overview
 
-DepenSage (from French "dépense" meaning expense + "sage" meaning wise) automates household expense tracking in a Hebrew Google Sheets spreadsheet. It parses Israeli credit card statements, classifies transactions using a lookup table, deduplicates against existing data, and writes everything to the correct monthly sheet.
+DepenSage (from French "dépense" meaning expense + "sage" meaning wise) automates household expense tracking in a Hebrew Google Sheets spreadsheet. It parses Israeli credit card and bank statements, classifies transactions, deduplicates against existing data, computes month-to-month carryover, allocates savings, and writes everything to the correct monthly sheet.
 
 ## Features
 
-- **Automated Pipeline**: Parse CC statements → filter pending → classify → deduplicate → write to sheet
-- **Lookup-based Classification**: Exact match and prefix pattern matching against a table built from historical data
-- **Interactive Review**: CLI workflow to classify unknown merchants, feeding back into the lookup table
-- **Multi-year Support**: Separate spreadsheet per year, with `--year` filtering
+- **Automated Pipeline**: Parse CC & bank statements → classify → deduplicate → stage → review → commit
+- **In-Memory Staging**: All computation happens in-memory via VirtualMonth objects. Google Sheets is read-only during staging — zero writes until you commit. Export to XLSX for review before writing.
+- **Sequential Per-Month Processing**: Each month is fully finalized (carryover → expenses → income → savings) before the next, ensuring accurate data chains
+- **Month-to-Month Carryover**: Budget surplus, savings accumulated, and savings budget automatically carry over. Works across years (Dec 2025 → Jan 2026).
+- **Savings Allocation**: Auto-computes from carryover-set savings budget, deducts preset targets, allocates surplus to a configurable default goal
+- **Lookup-based Classification**: Exact match and prefix pattern matching for CC merchants, bank actions, and income sources
+- **Interactive Review**: Export staged XLSX → edit classifications → import with change detection → update lookup tables
+- **Multi-year Support**: Separate spreadsheet per year with automatic cross-year handler resolution
+- **Bank Transcript Integration**: Parses Israeli bank transcripts — expenses, income, CC lump sums, and closing balances
+- **CC Verification**: Compare CC lump sums from bank against CC-tagged expenses per billing cycle
 - **Deduplication**: Safe to re-run — duplicate transactions are detected and skipped
-- **Google Sheets Integration**: Creates monthly sheets from templates, inserts rows when needed
 - **Hebrew Language Support**: Full support for Hebrew spreadsheets and categories
-- **Excel Statement Parsing**: Processes `.xlsx` files from Israeli CC providers (Cal, etc.)
 
 ## Requirements
 
@@ -46,67 +50,66 @@ DepenSage (from French "dépense" meaning expense + "sage" meaning wise) automat
    ```json
    {
      "spreadsheets": {
-       "2025": "your_2025_spreadsheet_id",
-       "2026": "your_2026_spreadsheet_id"
+       "2025": {"id": "spreadsheet_id_here", "year": 2025},
+       "2026": {"id": "spreadsheet_id_here", "year": 2026, "default": true}
      },
-     "credentials_file": ".secrets/your-credentials.json"
+     "credentials_file": ".secrets/your-credentials.json",
+     "default_savings_goal": "דירה"
    }
-   ```
-
-4. **Plant section markers** (one-time, for sheets predating the template update):
-   ```bash
-   python scripts/plant_section_markers.py --year 2026
    ```
 
 ## Usage
 
-### Process CC statements (main pipeline)
+### Main pipeline (CC statements and/or bank transcripts)
 
 ```bash
-# Process one or more statement files
-python -m depensage.sheets.cli process statement.xlsx
-
-# Process only 2026 transactions (ignores other years in the file)
-python -m depensage.sheets.cli --year 2026 process statement.xlsx
+python -m depensage.sheets.cli -s 2026 process statement.xlsx bank_transcript.xlsx
 ```
+
+The pipeline stages all changes and exports an XLSX for review. You can then write directly, edit the XLSX first, or abort.
 
 ### Review unknown merchants
 
 ```bash
-python -m depensage.sheets.cli review statement.xlsx
-```
-
-### Build lookup table from historical sheet data
-
-```bash
-python -m depensage.sheets.cli --year 2025 build-lookup
-```
-
-### Consolidate exact entries into prefix patterns
-
-```bash
-python -m depensage.sheets.cli consolidate-patterns
+python -m depensage.sheets.cli review statement.xlsx           # CC merchants
+python -m depensage.sheets.cli review-bank transcript.xlsx     # Bank expenses
+python -m depensage.sheets.cli review-income transcript.xlsx   # Income
 ```
 
 ### Manual carryover between months
 
 ```bash
-python -m depensage.sheets.cli carryover December January --source-year 2025 --dest-year 2026
+python -m depensage.sheets.cli -s 2026 carryover December January
+python -m depensage.sheets.cli carryover December January \
+  --source-spreadsheet 2025 --dest-spreadsheet 2026
 ```
 
-### Inspect sheets (development)
+### CC verification against bank lump sums
 
 ```bash
-python -m depensage.sheets.cli --year 2025 list-sheets
-python -m depensage.sheets.cli --year 2025 read January B2:G10
-python -m depensage.sheets.cli --year 2025 formulas January E130:E140
+python -m depensage.sheets.cli -s 2026 verify bank_transcript.xlsx
+```
+
+### Lookup table management
+
+```bash
+python -m depensage.sheets.cli build-lookup
+python -m depensage.sheets.cli consolidate-patterns
+```
+
+### Inspect sheets
+
+```bash
+python -m depensage.sheets.cli -s 2025 list-sheets
+python -m depensage.sheets.cli -s 2025 read January B2:G10
+python -m depensage.sheets.cli -s 2025 formulas January E130:E140
 ```
 
 ## Project Structure
 
-- **`engine/`** — Statement parser (Excel), pipeline orchestrator, deduplication, row formatter, month-to-month carryover
-- **`classifier/`** — Lookup-based classifier (exact + prefix patterns), persisted to `.artifacts/lookup.json`
-- **`sheets/`** — Google Sheets API integration and CLI
+- **`engine/`** — Core pipeline: `virtual_month.py` (in-memory month representation), `pipeline.py` (sequential orchestrator), `carryover.py` (budget/savings carry), `savings_allocator.py`, `staging.py` (XLSX export/import), `dedup.py`, `formatter.py`, `statement_parser.py`, `bank_parser.py`, `verification.py`
+- **`classifier/`** — Lookup-based classifiers (CC, bank, income) with exact + prefix patterns
+- **`sheets/`** — Google Sheets API integration (`spreadsheet_handler.py`) and CLI (`cli.py`, `cli_commands.py`)
 - **`config/`** — Settings management
 - **`scripts/`** — One-time migration scripts
 
@@ -114,13 +117,7 @@ python -m depensage.sheets.cli --year 2025 formulas January E130:E140
 
 ```bash
 source .venv/bin/activate
-
-# Run all tests
-python -m unittest discover
-
-# Lint and format
-flake8 depensage/
-black depensage/
+python -m unittest discover    # Run all tests (194)
 ```
 
 ## License
