@@ -390,6 +390,7 @@ class TestPipelineBankTransactions(unittest.TestCase):
         self._setup_bank_classifier_all()
         self._setup_income_classifier_all()
 
+        self.handler.sheet_exists.return_value = True
         self.handler.find_section_marker.side_effect = (
             lambda sheet, section: 131 if section == "budget" else 160
         )
@@ -570,8 +571,8 @@ class TestPipelineBankTransactions(unittest.TestCase):
         self.handler.find_reconciliation_label_row.assert_called_once_with(
             "January", 'כסף בעו"ש'
         )
-        self.handler.update_cell.assert_called_once_with(
-            "January", "E175", 20000.0
+        self.handler.batch_update_cells.assert_called_once_with(
+            "January", [("E175", 20000.0)]
         )
 
     def test_bank_balance_skipped_when_label_not_found(self):

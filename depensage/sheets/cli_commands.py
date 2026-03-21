@@ -143,10 +143,6 @@ def _import_and_derive_coordinates(xlsx_path, handlers):
     for ws_name, stage in stages.items():
         handler = get_h(stage.year)
 
-        # For new sheets, coordinates will be derived at commit time
-        if stage.needs_sheet_creation:
-            continue
-
         if stage.new_expenses:
             first_empty = handler.find_first_empty_expense_row(stage.month)
             marker_row = handler.find_section_marker(stage.month, "budget")

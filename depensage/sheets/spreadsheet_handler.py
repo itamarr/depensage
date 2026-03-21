@@ -831,6 +831,59 @@ class SheetHandler:
             logger.error(f"Failed to update cell {cell_ref} in {sheet_name}: {e}")
             return False
 
+    def batch_update_cells(self, sheet_name, updates):
+        """Write multiple cell values in a single API call.
+
+        Args:
+            sheet_name: Name of the sheet.
+            updates: List of (cell_ref, value) tuples,
+                     e.g. [("E15", 1234.5), ("E16", "=SUM(...)"), ...].
+
+        Returns:
+            True if successful, False otherwise.
+        """
+        if not updates:
+            return True
+        try:
+            data = [
+                {
+                    "range": f"{sheet_name}!{ref}",
+                    "values": [[val]],
+                }
+                for ref, val in updates
+            ]
+            body = {
+                "valueInputOption": "USER_ENTERED",
+                "data": data,
+            }
+            result = self.sheets_service.values().batchUpdate(
+                spreadsheetId=self.spreadsheet_id,
+                body=body,
+            ).execute()
+
+            # Patch cache for each update
+            cached = self._cache.sheets.get(sheet_name)
+            if cached:
+                for ref, val in updates:
+                    col = ord(ref[0].upper()) - ord('A')
+                    row_num = int(ref[1:])
+                    idx = row_num - 1
+                    while idx >= len(cached.raw_data):
+                        cached.raw_data.append([])
+                    existing = cached.raw_data[idx]
+                    while len(existing) <= col:
+                        existing.append('')
+                    existing[col] = val
+
+            logger.info(
+                f"Batch updated {len(updates)} cells in {sheet_name} "
+                f"({result.get('totalUpdatedCells', 0)} total)"
+            )
+            return True
+        except Exception as e:
+            logger.error(f"Failed to batch update cells in {sheet_name}: {e}")
+            return False
+
     def find_reconciliation_label_row(self, sheet_name, label):
         """Find a row in the reconciliation section by its label in column F/G.
 

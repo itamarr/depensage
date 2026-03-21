@@ -3,6 +3,7 @@ Month-to-month carryover logic.
 
 Reads budget remaining and savings totals from a source month,
 writes accumulated values to the destination month.
+All writes are batched to minimize API calls.
 """
 
 import logging
@@ -40,8 +41,6 @@ def _read_budget_carry_values(handler, sheet_name):
     for row in rows:
         if len(row) < 7:
             continue
-        # Columns: B=remaining, C=expense, D=budget, E=accumulated,
-        #          F=subcategory, G=category, H=carry_flag
         carry_flag = row[6] if len(row) > 6 else ""
         if carry_flag != "CARRY":
             continue
@@ -55,8 +54,6 @@ def _read_budget_carry_values(handler, sheet_name):
                 remaining = float(remaining)
             except (ValueError, TypeError):
                 continue
-            # Only carry over surpluses; debts are handled by the
-            # surplus/deficit formula and deducted from savings
             if remaining > 0:
                 results.append({
                     "category": category,
@@ -82,12 +79,9 @@ def _read_savings_totals(handler, sheet_name):
     for row in rows:
         if len(row) < 7:
             continue
-        # Columns: A=months_remaining, B=target, C=total, D=outgoing,
-        #          E=incoming, F=accumulated, G=goal_name
         goal = str(row[6]).strip() if row[6] else ""
         total = row[2]
 
-        # Skip header, marker, label, and total rows
         if not goal or goal in ("קטגוריה", "סה\"כ", 'סה"כ', "חסכון"):
             continue
         if goal.startswith("---"):
@@ -119,14 +113,11 @@ def _read_income_total(handler, sheet_name):
     if not rows:
         return None
 
-    # Find the total row (contains "סה"כ" in column F or G)
     for row in rows:
         if len(row) < 5:
             continue
-        # Check for total label
         for cell in row:
             if isinstance(cell, str) and "סה" in cell and "כ" in cell:
-                # Found total row — amount is in column E (index 3)
                 try:
                     return float(row[3]) if len(row) > 3 and row[3] else 0.0
                 except (ValueError, TypeError):
@@ -134,21 +125,19 @@ def _read_income_total(handler, sheet_name):
     return None
 
 
-def _write_budget_carry_formulas(handler, dest_month, source_month):
-    """Write carry-over formulas to budget Accumulated (E) column.
+def _collect_budget_carry_formulas(handler, dest_month, source_month):
+    """Collect carry-over formula updates for budget Accumulated (E) column.
 
-    For each CARRY-flagged budget line, writes a formula referencing
-    the source month's Remaining (B) column at the same row.
-    Budget layout is identical across months (same rows, same categories).
+    Returns list of (cell_ref, formula) tuples.
     """
     start_row, rows = handler.read_section_range(
         dest_month, "budget", "B:H", end_section="income"
     )
     if not rows:
         logger.error(f"Could not read budget section in {dest_month}")
-        return 0
+        return []
 
-    written = 0
+    updates = []
     for i, row in enumerate(rows):
         if len(row) < 7:
             continue
@@ -158,31 +147,29 @@ def _write_budget_carry_formulas(handler, dest_month, source_month):
 
         actual_row = start_row + i
         formula = f"=MAX('{source_month}'!B{actual_row},0)"
-        if handler.update_cell(dest_month, f"E{actual_row}", formula):
-            written += 1
+        updates.append((f"E{actual_row}", formula))
 
-    return written
+    return updates
 
 
-def _write_budget_accumulated_static(handler, sheet_name, carry_values):
-    """Write carry-over values to budget Accumulated (E) column (static).
+def _collect_budget_accumulated_static(handler, sheet_name, carry_values):
+    """Collect static carry-over updates for budget Accumulated (E) column.
 
-    Used for cross-year carryover where formulas can't reference
-    a different spreadsheet. Matches by (category, subcategory).
+    Used for cross-year carryover. Returns list of (cell_ref, value) tuples.
     """
     start_row, rows = handler.read_section_range(
         sheet_name, "budget", "B:H", end_section="income"
     )
     if not rows:
         logger.error(f"Could not read budget section in {sheet_name}")
-        return 0
+        return []
 
     carry_lookup = {
         (v["category"], v["subcategory"]): v["remaining"]
         for v in carry_values
     }
 
-    written = 0
+    updates = []
     for i, row in enumerate(rows):
         if len(row) < 7:
             continue
@@ -196,34 +183,29 @@ def _write_budget_accumulated_static(handler, sheet_name, carry_values):
 
         if key in carry_lookup:
             actual_row = start_row + i
-            value = carry_lookup[key]
-            if handler.update_cell(sheet_name, f"E{actual_row}", value):
-                written += 1
+            updates.append((f"E{actual_row}", carry_lookup[key]))
 
-    return written
+    return updates
 
 
-def _write_savings_carry_formulas(handler, dest_month, source_month):
-    """Write carry-over formulas to savings Accumulated (F) column.
+def _collect_savings_carry_formulas(handler, dest_month, source_month):
+    """Collect carry-over formula updates for savings Accumulated (F) column.
 
-    For each savings goal row, writes a formula referencing the source
-    month's Total (C) column at the same row. Layout is identical
-    across months.
+    Returns list of (cell_ref, formula) tuples.
     """
     start_row, rows = handler.read_section_range(
         dest_month, "savings", "A:G", end_section="reconciliation"
     )
     if not rows:
         logger.error(f"Could not read savings section in {dest_month}")
-        return 0
+        return []
 
-    written = 0
+    updates = []
     for i, row in enumerate(rows):
         if len(row) < 7:
             continue
         goal = str(row[6]).strip() if row[6] else ""
 
-        # Skip header, marker, label, and total rows
         if not goal or goal in ("קטגוריה", "סה\"כ", 'סה"כ', "חסכון"):
             continue
         if goal.startswith("---") or goal.startswith("הערה") or goal.startswith("העברה"):
@@ -231,27 +213,26 @@ def _write_savings_carry_formulas(handler, dest_month, source_month):
 
         actual_row = start_row + i
         formula = f"='{source_month}'!C{actual_row}"
-        if handler.update_cell(dest_month, f"F{actual_row}", formula):
-            written += 1
+        updates.append((f"F{actual_row}", formula))
 
-    return written
+    return updates
 
 
-def _write_savings_accumulated_static(handler, sheet_name, savings_totals):
-    """Write carry-over savings totals to Accumulated (F) column (static).
+def _collect_savings_accumulated_static(handler, sheet_name, savings_totals):
+    """Collect static savings carry-over updates for Accumulated (F) column.
 
-    Used for cross-year carryover. Matches by goal name in column G.
+    Returns list of (cell_ref, value) tuples.
     """
     start_row, rows = handler.read_section_range(
         sheet_name, "savings", "A:G", end_section="reconciliation"
     )
     if not rows:
         logger.error(f"Could not read savings section in {sheet_name}")
-        return 0
+        return []
 
     totals_lookup = {s["goal"]: s["total"] for s in savings_totals}
 
-    written = 0
+    updates = []
     for i, row in enumerate(rows):
         if len(row) < 7:
             continue
@@ -260,31 +241,26 @@ def _write_savings_accumulated_static(handler, sheet_name, savings_totals):
             continue
 
         actual_row = start_row + i
-        value = totals_lookup[goal]
-        if handler.update_cell(sheet_name, f"F{actual_row}", value):
-            written += 1
+        updates.append((f"F{actual_row}", totals_lookup[goal]))
 
-    return written
+    return updates
 
 
-def _write_savings_budget_from_income(handler, sheet_name, income_total):
-    """Set the חסכון budget line so total budget = previous month's income.
+def _collect_savings_budget_update(handler, sheet_name, income_total):
+    """Compute savings budget and return (cell_ref, value) or None.
 
-    Reads all budget lines' D values (column D), finds the חסכון row,
-    and sets its D value to: income_total - sum of all other budget D values.
-
-    Returns True if written, False otherwise.
+    Sets the savings budget line D = income_total - sum(other budget D values).
     """
     if income_total is None or income_total == 0:
         logger.info("No income total available, skipping savings budget adjustment")
-        return False
+        return None
 
     start_row, rows = handler.read_section_range(
         sheet_name, "budget", "B:H", end_section="income"
     )
     if not rows:
         logger.error(f"Could not read budget section in {sheet_name}")
-        return False
+        return None
 
     savings_row = None
     other_budgets_sum = 0.0
@@ -294,7 +270,6 @@ def _write_savings_budget_from_income(handler, sheet_name, income_total):
             continue
         category = str(row[5]).strip() if row[5] else ""
 
-        # Skip header, marker, empty, total rows
         if not category or category in ("קטגוריה", "---BUDGET---"):
             continue
         if "סה" in category and "כ" in category:
@@ -312,20 +287,22 @@ def _write_savings_budget_from_income(handler, sheet_name, income_total):
             other_budgets_sum += budget_val
 
     if savings_row is None:
-        logger.error(f"חסכון budget line not found in {sheet_name}")
-        return False
+        logger.error(f"Savings budget line not found in {sheet_name}")
+        return None
 
     savings_budget = income_total - other_budgets_sum
     logger.info(
-        f"Setting חסכון budget: {income_total:,.2f} - {other_budgets_sum:,.2f} "
+        f"Setting savings budget: {income_total:,.2f} - {other_budgets_sum:,.2f} "
         f"= {savings_budget:,.2f}"
     )
 
-    return handler.update_cell(sheet_name, f"D{savings_row}", savings_budget)
+    return (f"D{savings_row}", savings_budget)
 
 
 def run_carryover(source_handler, source_month, dest_handler, dest_month):
     """Carry over budget and savings from source month to destination month.
+
+    All cell updates are batched into a single API call.
 
     Args:
         source_handler: SheetHandler for the source spreadsheet.
@@ -337,7 +314,7 @@ def run_carryover(source_handler, source_month, dest_handler, dest_month):
         Dict with keys: budget_lines, savings_lines, income_total,
         savings_budget_set.
     """
-    logger.info(f"Running carryover: {source_month} → {dest_month}")
+    logger.info(f"Running carryover: {source_month} -> {dest_month}")
 
     same_spreadsheet = (
         hasattr(source_handler, 'spreadsheet_id')
@@ -345,54 +322,61 @@ def run_carryover(source_handler, source_month, dest_handler, dest_month):
         and source_handler.spreadsheet_id == dest_handler.spreadsheet_id
     )
 
-    # 1. Write budget carry to destination
+    all_updates = []  # (cell_ref, value) pairs for dest sheet
+
+    # 1. Budget carry
     if same_spreadsheet:
-        # Same spreadsheet: write formulas referencing the source month
-        budget_written = _write_budget_carry_formulas(
+        budget_updates = _collect_budget_carry_formulas(
             dest_handler, dest_month, source_month
         )
         logger.info(
-            f"Wrote {budget_written} budget carry formulas "
-            f"(={source_month}!B...) to {dest_month}"
+            f"Collected {len(budget_updates)} budget carry formulas "
+            f"(={source_month}!B...) for {dest_month}"
         )
     else:
-        # Cross-year: read values and write static (can't formula across sheets)
         carry_values = _read_budget_carry_values(source_handler, source_month)
         logger.info(f"Read {len(carry_values)} CARRY budget lines from {source_month}")
-        budget_written = _write_budget_accumulated_static(
+        budget_updates = _collect_budget_accumulated_static(
             dest_handler, dest_month, carry_values
         )
-        logger.info(f"Wrote {budget_written} budget accumulated values to {dest_month}")
+    all_updates.extend(budget_updates)
 
-    # 2. Write savings carry to destination
+    # 2. Savings carry
     if same_spreadsheet:
-        savings_written = _write_savings_carry_formulas(
+        savings_updates = _collect_savings_carry_formulas(
             dest_handler, dest_month, source_month
         )
         logger.info(
-            f"Wrote {savings_written} savings carry formulas "
-            f"(='{source_month}'!C...) to {dest_month}"
+            f"Collected {len(savings_updates)} savings carry formulas "
+            f"(='{source_month}'!C...) for {dest_month}"
         )
     else:
         savings_totals = _read_savings_totals(source_handler, source_month)
         logger.info(f"Read {len(savings_totals)} savings goals from {source_month}")
-        savings_written = _write_savings_accumulated_static(
+        savings_updates = _collect_savings_accumulated_static(
             dest_handler, dest_month, savings_totals
         )
-        logger.info(f"Wrote {savings_written} savings accumulated values to {dest_month}")
+    all_updates.extend(savings_updates)
 
-    # 3. Read source income total
+    # 3. Read source income total and set savings budget
     income_total = _read_income_total(source_handler, source_month)
     logger.info(f"Source income total: {income_total}")
 
-    # 6. Set savings budget line so total budget = source income
-    savings_budget_set = _write_savings_budget_from_income(
+    budget_update = _collect_savings_budget_update(
         dest_handler, dest_month, income_total
     )
+    savings_budget_set = budget_update is not None
+    if budget_update:
+        all_updates.append(budget_update)
+
+    # 4. Batch write all updates
+    if all_updates:
+        dest_handler.batch_update_cells(dest_month, all_updates)
+        logger.info(f"Wrote {len(all_updates)} carryover updates to {dest_month}")
 
     return {
-        "budget_lines": budget_written,
-        "savings_lines": savings_written,
+        "budget_lines": len(budget_updates),
+        "savings_lines": len(savings_updates),
         "income_total": income_total,
         "savings_budget_set": savings_budget_set,
     }

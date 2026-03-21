@@ -54,7 +54,6 @@ class MonthStage:
     bank_balance: float | None = None  # closing bank balance for E175
     savings_allocations: list = field(default_factory=list)  # SavingsAllocation list
     savings_warning: str | None = None
-    needs_sheet_creation: bool = False  # True if sheet doesn't exist yet
 
 
 def _month_order(month_name):
@@ -107,8 +106,6 @@ class StagedPipelineResult:
 
         for stage in self.sorted_stages():
             parts = []
-            if stage.needs_sheet_creation:
-                parts.append("NEW SHEET")
             if stage.new_expenses:
                 parts.append(f"{len(stage.new_expenses)} expenses")
             if stage.duplicates:
@@ -121,8 +118,6 @@ class StagedPipelineResult:
                 parts.append(f"bank balance: {stage.bank_balance:,.2f}")
             if stage.savings_allocations:
                 parts.append(f"{len(stage.savings_allocations)} savings allocations")
-            elif stage.needs_sheet_creation:
-                parts.append("savings: computed at commit")
             if parts:
                 lines.append(f"  {stage.month} {stage.year}: {', '.join(parts)}")
             if stage.savings_warning:
@@ -154,7 +149,6 @@ class StagedPipelineResult:
             stage.new_expenses or stage.new_income
             or stage.bank_balance is not None
             or stage.savings_allocations
-            or stage.needs_sheet_creation
             for stage in self.month_stages.values()
         )
 
@@ -184,7 +178,7 @@ class StagedPipelineResult:
         summary_ws.title = "Summary"
 
         bold = Font(bold=True)
-        summary_ws.append(["Month", "New Expenses", "Duplicates", "New Income", "Income Dupes", "Bank Balance", "New Sheet"])
+        summary_ws.append(["Month", "New Expenses", "Duplicates", "New Income", "Income Dupes", "Bank Balance"])
         for cell in summary_ws[1]:
             cell.font = bold
 
@@ -196,7 +190,6 @@ class StagedPipelineResult:
                 len(stage.new_income),
                 stage.income_duplicates,
                 stage.bank_balance if stage.bank_balance is not None else "",
-                "Yes" if stage.needs_sheet_creation else "",
             ])
 
         # Add unclassified merchants to summary
@@ -302,8 +295,6 @@ class StagedPipelineResult:
                 meta_ws.append([ws_name, "income", i, meta.orig_category, meta.orig_subcategory])
             for i, alloc in enumerate(stage.savings_allocations):
                 meta_ws.append([ws_name, "savings", i, alloc.goal_name, alloc.row_number])
-            if stage.needs_sheet_creation:
-                meta_ws.append([ws_name, "new_sheet", 0, "", ""])
 
         wb.save(path)
         return path
@@ -311,9 +302,8 @@ class StagedPipelineResult:
     def commit(self, handlers):
         """Execute all staged writes to the spreadsheet.
 
-        Processes months in chronological order. For new sheets:
-        creates from template, runs carryover (which sets savings budget),
-        re-derives write coordinates, and computes savings allocations.
+        Processes months in chronological order. Batches cell updates
+        (savings allocations, bank balance) to minimize API calls.
 
         Args:
             handlers: Dict mapping year (int) to SheetHandler,
@@ -323,7 +313,6 @@ class StagedPipelineResult:
             Committed PipelineResult with final statistics.
         """
         from depensage.engine.pipeline import MonthResult, PipelineResult
-        from depensage.sheets.spreadsheet_handler import SECTION_MARKERS
 
         if not isinstance(handlers, dict):
             single = handlers
@@ -337,28 +326,6 @@ class StagedPipelineResult:
             handler = get_handler(stage.year)
             written = 0
             income_written = 0
-
-            # Create sheet from template if needed
-            if stage.needs_sheet_creation:
-                logger.info(f"Creating sheet '{stage.month}' from template")
-                success = handler.create_sheet_from_template(stage.month)
-                if not success:
-                    logger.error(
-                        f"Failed to create sheet '{stage.month}', "
-                        f"skipping all writes for this month"
-                    )
-                    continue
-                # Invalidate cache so we read fresh data
-                handler.invalidate_cache(stage.month)
-
-                # Run carryover from previous month
-                _run_carryover_at_commit(handler, stage, get_handler)
-
-                # Re-derive write coordinates for the new sheet
-                _derive_write_coordinates(handler, stage)
-
-                # Compute savings allocations now that budget is set
-                _compute_savings_for_new_sheet(handler, stage)
 
             # Write expenses
             if stage.new_expenses:
@@ -389,41 +356,31 @@ class StagedPipelineResult:
                 )
                 income_written = len(stage.new_income)
 
-            # Write savings allocations to column E
+            # Batch cell updates: savings allocations + bank balance
+            cell_updates = []
+
             if stage.savings_allocations:
                 from depensage.engine.savings_allocator import find_savings_goal_rows
-                # Re-scan for fresh row numbers (inserts may have shifted rows)
                 fresh_rows = find_savings_goal_rows(handler, stage.month)
                 for alloc in stage.savings_allocations:
                     row_num = fresh_rows.get(alloc.goal_name, alloc.row_number)
                     if row_num:
-                        handler.update_cell(
-                            stage.month, f"E{row_num}", alloc.allocated
-                        )
-                        logger.info(
-                            f"Wrote savings allocation {alloc.allocated:,.2f} "
-                            f"for {alloc.goal_name} to {stage.month}!E{row_num}"
-                        )
+                        cell_updates.append((f"E{row_num}", alloc.allocated))
 
-            # Write bank balance to the reconciliation section
             if stage.bank_balance is not None:
                 bal_row = handler.find_reconciliation_label_row(
                     stage.month, 'כסף בעו"ש'
                 )
                 if bal_row:
-                    handler.update_cell(
-                        stage.month, f"E{bal_row}", stage.bank_balance
-                    )
-                    logger.info(
-                        f"Wrote bank balance {stage.bank_balance:,.2f} "
-                        f"to {stage.month}!E{bal_row}"
-                    )
+                    cell_updates.append((f"E{bal_row}", stage.bank_balance))
                 else:
                     logger.warning(
                         f"Could not find bank balance label in "
-                        f"{stage.month} reconciliation section, "
-                        f"skipping bank balance write"
+                        f"{stage.month} reconciliation section"
                     )
+
+            if cell_updates:
+                handler.batch_update_cells(stage.month, cell_updates)
 
             month_results.append(MonthResult(
                 month=stage.month,
@@ -444,110 +401,6 @@ class StagedPipelineResult:
             cc_lump_sums=self.cc_lump_sums,
         )
 
-
-def _run_carryover_at_commit(handler, stage, get_handler):
-    """Run carryover for a newly created sheet at commit time."""
-    from depensage.engine.carryover import run_carryover, get_previous_month
-
-    prev_month, year_offset = get_previous_month(stage.month)
-    if prev_month is None:
-        return
-    prev_year = stage.year + year_offset
-    try:
-        prev_handler = get_handler(prev_year)
-    except (ValueError, KeyError):
-        logger.info(
-            f"No handler for year {prev_year}, skipping carryover "
-            f"from {prev_month}"
-        )
-        return
-    if not prev_handler.sheet_exists(prev_month):
-        logger.info(
-            f"Previous month sheet '{prev_month}' does not exist, "
-            f"skipping carryover"
-        )
-        return
-    result = run_carryover(prev_handler, prev_month, handler, stage.month)
-    logger.info(
-        f"Carryover {prev_month} -> {stage.month}: "
-        f"{result['budget_lines']} budget, "
-        f"{result['savings_lines']} savings"
-    )
-
-
-def _derive_write_coordinates(handler, stage):
-    """Derive expense/income write coordinates for a newly created sheet."""
-    if stage.new_expenses:
-        marker_row = handler.find_section_marker(stage.month, "budget")
-        if marker_row is None:
-            logger.error(f"No budget marker in new sheet {stage.month}")
-            return
-        first_empty = handler.find_first_empty_expense_row(stage.month)
-        rows_needed = len(stage.new_expenses)
-        last_data_row = marker_row - 2
-        available = last_data_row - first_empty + 1
-        stage.expense_start_row = first_empty
-        stage.expense_insert_needed = max(0, rows_needed - available)
-
-    if stage.new_income:
-        first_empty = handler.find_first_empty_income_row(stage.month)
-        if first_empty is None:
-            logger.error(
-                f"Could not find income insertion point in new sheet {stage.month}"
-            )
-            return
-        savings_marker = handler.find_section_marker(stage.month, "savings")
-        if savings_marker is None:
-            logger.error(f"No savings marker in new sheet {stage.month}")
-            return
-        last_income_data = savings_marker - 3
-        available = last_income_data - first_empty + 1
-        stage.income_start_row = first_empty
-        stage.income_insert_needed = max(0, len(stage.new_income) - available)
-
-
-def _compute_savings_for_new_sheet(handler, stage):
-    """Compute savings allocation for a newly created sheet at commit time.
-
-    At this point, carryover has already run, so the savings budget
-    should be set from the previous month's income.
-    """
-    from depensage.engine.savings_allocator import (
-        read_savings_budget, read_savings_goals, allocate_savings,
-    )
-    from depensage.config.settings import load_settings
-
-    try:
-        budget = read_savings_budget(handler, stage.month)
-    except Exception:
-        logger.debug(f"Could not read savings budget for new sheet {stage.month}")
-        return
-    if budget is None:
-        logger.info(f"No savings budget found for new sheet {stage.month}")
-        return
-
-    try:
-        goals = read_savings_goals(handler, stage.month)
-    except Exception:
-        logger.debug(f"Could not read savings goals for new sheet {stage.month}")
-        return
-    if not goals:
-        return
-
-    try:
-        settings = load_settings()
-        default_goal = settings.get("default_savings_goal")
-    except Exception:
-        default_goal = None
-
-    result = allocate_savings(budget, goals, default_goal)
-    stage.savings_allocations = result.allocations
-    stage.savings_warning = result.warning
-    logger.info(
-        f"Savings allocation for new sheet {stage.month}: "
-        f"budget={budget:,.2f}, presets={result.total_preset:,.2f}, "
-        f"surplus={result.surplus:,.2f}"
-    )
 
 
 def _cell_str(value):
@@ -578,15 +431,12 @@ def import_staged_xlsx(path):
     # Group by (month, row_type)
     meta_by_key = {}
     savings_meta_by_month = {}  # {ws_name: [(goal_name, row_number), ...]}
-    new_sheet_months = set()
     for row in meta_rows:
         month, row_type, row_index, orig_cat, orig_sub = row
         if row_type == "savings":
             savings_meta_by_month.setdefault(month, []).append(
                 (_cell_str(orig_cat), orig_sub)  # goal_name, row_number
             )
-        elif row_type == "new_sheet":
-            new_sheet_months.add(month)
         else:
             meta_by_key.setdefault((month, row_type), []).append(
                 RowMeta(
@@ -625,8 +475,6 @@ def import_staged_xlsx(path):
         year = int(parts[1]) if len(parts) > 1 else 0
 
         stage = MonthStage(month=month_name, year=year)
-        if ws_name in new_sheet_months:
-            stage.needs_sheet_creation = True
 
         i = 0
         # Find and read expenses

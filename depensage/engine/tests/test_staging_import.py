@@ -389,43 +389,19 @@ class TestSavingsRoundTrip(unittest.TestCase):
         ]
         self.assertTrue(staged.has_writes())
 
-    def test_has_writes_with_new_sheet(self):
-        """has_writes() returns True when a new sheet needs creation."""
-        staged = StagedPipelineResult()
-        stage = staged.get_or_create_stage("January", 2026)
-        stage.needs_sheet_creation = True
-        self.assertTrue(staged.has_writes())
-
-    def test_new_sheet_flag_round_trip(self):
-        """needs_sheet_creation flag preserved via _row_meta."""
-        from depensage.engine.savings_allocator import SavingsAllocation
-        staged = StagedPipelineResult()
-        stage = staged.get_or_create_stage("March", 2026)
-        stage.needs_sheet_creation = True
-        stage.new_expenses = [
-            ["Shop", "", "", "10.00", "cat", "03/01/2026", "CC"],
-        ]
-        stage.expense_meta = [
-            RowMeta(orig_category="cat", orig_subcategory=""),
-        ]
-
-        path = os.path.join(tempfile.mkdtemp(), "test.xlsx")
-        staged.export_xlsx(path)
-
-        stages, changes = import_staged_xlsx(path)
-        self.assertTrue(stages["Mar 2026"].needs_sheet_creation)
-
-    def test_summary_shows_english_labels(self):
-        """Summary output uses English labels."""
+    def test_summary_shows_savings_info(self):
+        """Summary output shows savings allocation info."""
         from depensage.engine.savings_allocator import SavingsAllocation
         staged = StagedPipelineResult(total_parsed=1, classified=1)
         stage = staged.get_or_create_stage("January", 2026)
-        stage.needs_sheet_creation = True
         stage.new_expenses = [["A", "", "", "10", "cat", "01/01", "CC"]]
+        stage.savings_allocations = [
+            SavingsAllocation(goal_name="test", allocated=100, row_number=50,
+                              is_default=False, is_blatam=False),
+        ]
 
         summary = staged.summary()
-        self.assertIn("NEW SHEET", summary)
-        self.assertIn("savings: computed at commit", summary)
+        self.assertIn("1 savings allocations", summary)
 
 
 if __name__ == "__main__":
