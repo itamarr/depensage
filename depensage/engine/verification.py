@@ -3,8 +3,8 @@ CC charge verification — compares CC lump sums from the bank against
 CC-tagged expenses in the spreadsheet.
 
 Each CC lump sum (debited around the 10th of the month) covers one
-billing cycle: previous month's pending expenses (date > billing_day)
-plus current month's charged expenses (date <= billing_day).
+billing cycle: previous month's pending expenses (status empty)
+plus current month's charged expenses (status "CC").
 
 Supports per-card matching: tries individual lump sums first (single-card),
 then the sum of all lump sums (both-cards).
@@ -15,7 +15,6 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 
 from depensage.engine.bank_parser import CCLumpSum
-from depensage.engine.formatter import DEFAULT_BILLING_DAY
 from depensage.sheets.sheet_utils import SheetUtils
 
 logger = logging.getLogger(__name__)
@@ -121,7 +120,6 @@ def _parse_expense_rows_with_status(rows):
 
 def verify_cc_charges(handler, cc_lump_sums, year,
                       prev_year_handler=None,
-                      billing_day=DEFAULT_BILLING_DAY,
                       tolerance=0.05):
     """Verify CC charges against lump sums for all billing cycles.
 
@@ -129,6 +127,9 @@ def verify_cc_charges(handler, cc_lump_sums, year,
       - Current month's "CC" (charged) expenses
       - Previous month's "" (pending) expenses
     against the lump sum amounts.
+
+    Status is determined by the charge_date column during formatting:
+    CC = charge_date in same month as transaction, empty = next month.
 
     Tries per-card matching first (individual lump sum), then
     both-cards matching (sum of all lump sums).
@@ -138,7 +139,6 @@ def verify_cc_charges(handler, cc_lump_sums, year,
         cc_lump_sums: List of CCLumpSum from bank transcript.
         year: The year being verified.
         prev_year_handler: SheetHandler for previous year (for January).
-        billing_day: Day of month for CC billing (default 10).
         tolerance: Acceptable difference in NIS (default 0.05).
 
     Returns:

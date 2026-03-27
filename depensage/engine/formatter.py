@@ -9,32 +9,31 @@ import pandas as pd
 
 from depensage.sheets.sheet_utils import SheetUtils
 
-# Default CC billing day (day of month when charges are debited from bank)
-DEFAULT_BILLING_DAY = 10
 
-
-def format_for_sheet(transactions, billing_day=DEFAULT_BILLING_DAY):
+def format_for_sheet(transactions):
     """Format transactions into 7-column rows matching sheet columns B–H.
 
     Each row: [business_name, notes, subcategory, amount, category, date, status]
 
-    Status is "CC" if the transaction date's day-of-month <= billing_day
-    (charged in current billing cycle), empty string otherwise (pending —
-    will be charged next billing cycle). Bank transactions use "BANK" instead.
+    Status is determined from the charge_date column (the date the CC
+    company debits the bank): if charge_date falls in the same month as
+    the transaction → "CC" (charged this cycle), otherwise → "" (pending,
+    charged next cycle). If charge_date is missing, falls back to empty.
 
     For unclassified transactions, category and subcategory are empty strings.
     Date formatted as MM/DD/YYYY.
 
     Args:
         transactions: DataFrame with columns date, business_name, amount,
-                      and optionally category, subcategory.
-        billing_day: Day of month when CC charges are debited (default 10).
+                      and optionally category, subcategory, charge_date.
 
     Returns:
         List of 7-element lists.
     """
     if transactions is None or transactions.empty:
         return []
+
+    has_charge_date = "charge_date" in transactions.columns
 
     rows = []
     for _, tx in transactions.iterrows():
@@ -43,7 +42,16 @@ def format_for_sheet(transactions, billing_day=DEFAULT_BILLING_DAY):
         category = tx.get("category", "") or ""
         subcategory = tx.get("subcategory", "") or ""
         business_name = tx.get("business_name", "") or ""
-        status = "CC" if tx["date"].day <= billing_day else ""
+
+        # Determine CC vs pending from charge_date
+        if has_charge_date and pd.notna(tx.get("charge_date")):
+            charge_month = tx["charge_date"].month
+            charge_year = tx["charge_date"].year
+            tx_month = tx["date"].month
+            tx_year = tx["date"].year
+            status = "CC" if (charge_year, charge_month) == (tx_year, tx_month) else ""
+        else:
+            status = ""
 
         rows.append([
             business_name,   # B
