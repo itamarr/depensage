@@ -117,7 +117,7 @@ python -m depensage.sheets.cli -s 2025 formulas January E130:E140
 
 ```bash
 source .venv/bin/activate
-python -m unittest discover    # Run all tests (194)
+python -m unittest discover    # Run all tests (195)
 ```
 
 ## License

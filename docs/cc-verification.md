@@ -7,20 +7,20 @@ expenses in the spreadsheet, to verify nothing was missed or double-counted.
 
 ## How CC Billing Works
 
-- Billing day is the 10th of each month
 - Each month the bank debits 2 CC lump sums (one per card — user + wife)
-- The lump sum on month N's 10th covers:
-  - Previous month's **pending** transactions (date > 10th in month N-1)
-  - Current month's **charged** transactions (date <= 10th in month N)
-- The cycle may be 10th-through-9th (inclusive on both ends) — TBD after
-  studying real transcript data around the boundary
+- Each card has its own billing cutoff (Itamar's: day 8, Noa's: varies up to day 10)
+- The `charge_date` column in the CC statement is the ground truth: it's the exact
+  date the CC company debits the bank account
+- Status is set by comparing `charge_date` month to transaction month:
+  - Same month → **CC** (charged this cycle)
+  - Different month → empty (pending, charged next cycle)
 
 ## Data Sources
 
 - **CC lump sums**: Extracted from bank transcript by `bank_parser.py`
   (action contains "כרטיסי אשראי ל"). Stored in `PipelineResult.cc_lump_sums`.
-- **CC expenses**: Rows in the spreadsheet with status "CC" (charged, date <= 10)
-  or empty status (pending, date > 10).
+- **CC expenses**: Rows in the spreadsheet with status "CC" (charged) or empty
+  status (pending). Status determined from `charge_date` during formatting.
 
 ## Verification Algorithm
 
@@ -32,19 +32,9 @@ For each month with CC lump sums:
 4. Compare against the CC lump sum(s) for this month
 5. Since there are 2 cards (user + wife), and we may only have one card's
    data ingested, match against whichever single lump sum fits. If none fits,
-   flag for debugging.
+   try the sum of both cards. Flag mismatches for debugging.
 
-## Open Questions
+## Notes
 
-- Exact billing boundary: is the 10th inclusive for charged or pending?
-  Will be determined by studying a fresh transcript downloaded around the 10th.
 - Wife's CC: once ingested, both lump sums should be accounted for.
-- Tolerance: should we allow small rounding differences?
-
-## Implementation Plan
-
-1. Add `verify_cc_charges(handler, month, year, cc_lump_sums)` to pipeline or
-   a new `verification.py` module
-2. Call it after writing expenses, using the lump sums from bank parser
-3. Report match/mismatch in CLI output
-4. For web app: show verification status per month
+- Tolerance: small rounding differences (< 0.05 NIS) are accepted.
