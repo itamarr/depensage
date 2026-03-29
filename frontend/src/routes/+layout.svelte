@@ -37,7 +37,7 @@
 {:else if isLoginPage}
 	{@render children()}
 {:else if $isAuthenticated}
-	<div class="flex min-h-screen bg-gray-100">
+	<div class="flex min-h-screen" style="background-color: #e8f0f4;">
 		<NavSidebar />
 		<main class="flex-1 p-6 overflow-auto">
 			{@render children()}

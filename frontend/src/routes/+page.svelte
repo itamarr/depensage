@@ -8,7 +8,8 @@
 	<div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-8">
 		<a
 			href="/pipeline"
-			class="block p-6 bg-white rounded-xl shadow-sm hover:shadow-md transition-shadow border border-gray-200 group"
+			class="block p-6 rounded-xl shadow-sm hover:shadow-md transition-shadow group"
+			style="background: white; border: 1px solid #b3dbe9;"
 		>
 			<div class="text-2xl mb-2 group-hover:scale-110 transition-transform inline-block">⚙️</div>
 			<h2 class="text-lg font-semibold text-primary-700">Process Statements</h2>
@@ -17,7 +18,8 @@
 
 		<a
 			href="/months"
-			class="block p-6 bg-white rounded-xl shadow-sm hover:shadow-md transition-shadow border border-gray-200 group"
+			class="block p-6 rounded-xl shadow-sm hover:shadow-md transition-shadow group"
+			style="background: white; border: 1px solid #b3dbe9;"
 		>
 			<div class="text-2xl mb-2 group-hover:scale-110 transition-transform inline-block">📅</div>
 			<h2 class="text-lg font-semibold text-primary-700">View Months</h2>
@@ -25,7 +27,7 @@
 		</a>
 	</div>
 
-	<div class="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
+	<div class="rounded-xl shadow-sm p-6" style="background: white; border: 1px solid #b3dbe9;">
 		<h2 class="text-lg font-semibold text-primary-700 mb-4">Recent Runs</h2>
 		<p class="text-sm text-gray-400">No pipeline runs yet. Upload statements to get started.</p>
 	</div>
