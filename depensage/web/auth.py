@@ -84,13 +84,13 @@ def require_auth(request: Request):
         raise HTTPException(status_code=401, detail="Not authenticated")
 
 
-def set_session_cookie(response: Response, token: str):
+def set_session_cookie(response: Response, token: str, secure: bool = False):
     """Set the session cookie on a response."""
     response.set_cookie(
         key=COOKIE_NAME,
         value=token,
         httponly=True,
-        samesite="strict",
-        secure=True,
+        samesite="lax",
+        secure=secure,
         max_age=_SESSION_TTL,
     )

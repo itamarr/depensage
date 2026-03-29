@@ -53,8 +53,8 @@ async def login(req: LoginRequest, request: Request, response: Response):
     return LoginResponse(ok=True)
 
 
-@router.get("/config", response_model=ConfigResponse)
-async def config(request: Request = Depends(require_auth)):
+@router.get("/config", response_model=ConfigResponse, dependencies=[Depends(require_auth)])
+async def config():
     settings = load_settings()
     spreadsheets = {}
     for key, entry in settings["spreadsheets"].items():

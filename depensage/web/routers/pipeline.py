@@ -27,7 +27,10 @@ from depensage.web.session import SessionStore
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/api/pipeline", tags=["pipeline"])
+router = APIRouter(
+    prefix="/api/pipeline", tags=["pipeline"],
+    dependencies=[Depends(require_auth)],
+)
 
 
 def _get_store(request: Request) -> SessionStore:
@@ -36,8 +39,8 @@ def _get_store(request: Request) -> SessionStore:
 
 @router.post("/upload", response_model=UploadResponse)
 async def upload_files(
+    request: Request,
     files: list[UploadFile] = File(...),
-    request: Request = Depends(require_auth),
 ):
     """Upload statement files and create a pipeline session."""
     store = _get_store(request)
@@ -71,7 +74,7 @@ async def upload_files(
 async def run(
     session_id: str,
     req: PipelineRunRequest,
-    request: Request = Depends(require_auth),
+    request: Request,
 ):
     """Start pipeline execution. Returns immediately; poll /progress for SSE."""
     store = _get_store(request)
@@ -192,7 +195,7 @@ async def progress(session_id: str, request: Request):
 @router.get("/{session_id}/result", response_model=StagedResultSummary)
 async def result(
     session_id: str,
-    request: Request = Depends(require_auth),
+    request: Request,
 ):
     """Get staged pipeline result summary."""
     store = _get_store(request)
@@ -233,7 +236,7 @@ async def month_detail(
     session_id: str,
     month: str,
     year: int,
-    request: Request = Depends(require_auth),
+    request: Request,
 ):
     """Get detailed staged data for a specific month."""
     store = _get_store(request)
@@ -299,7 +302,7 @@ async def month_detail(
 @router.post("/{session_id}/commit", response_model=CommitResult)
 async def commit(
     session_id: str,
-    request: Request = Depends(require_auth),
+    request: Request,
 ):
     """Commit staged data to Google Sheets."""
     store = _get_store(request)
@@ -337,7 +340,7 @@ async def commit(
 @router.delete("/{session_id}")
 async def discard(
     session_id: str,
-    request: Request = Depends(require_auth),
+    request: Request,
 ):
     """Discard a pipeline session and clean up temp files."""
     store = _get_store(request)
