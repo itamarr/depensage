@@ -191,3 +191,6 @@ tmp*/
 
 # Built frontend served by FastAPI
 depensage/web/static/
+
+# Server logs
+logs/
