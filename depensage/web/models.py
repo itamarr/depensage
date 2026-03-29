@@ -96,6 +96,42 @@ class MonthStageDetail(BaseModel):
     income_duplicates: int
 
 
+class ExpenseEdit(BaseModel):
+    index: int
+    category: str
+    subcategory: str
+
+
+class IncomeEdit(BaseModel):
+    index: int
+    category: str
+    comments: str = ""
+
+
+class BulkEditRequest(BaseModel):
+    expenses: list[ExpenseEdit] = []
+    income: list[IncomeEdit] = []
+
+
+class CategoryInfo(BaseModel):
+    categories: dict[str, list[str]]
+
+
+class RowChangeItem(BaseModel):
+    month: str
+    row_type: str
+    source: str
+    lookup_key: str
+    old_category: str
+    new_category: str
+    old_subcategory: str
+    new_subcategory: str
+
+
+class LookupUpdateRequest(BaseModel):
+    changes: list[RowChangeItem]
+
+
 class CommitResult(BaseModel):
     total_parsed: int
     months: list[dict]
