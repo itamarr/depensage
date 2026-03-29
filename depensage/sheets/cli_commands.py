@@ -690,3 +690,102 @@ def cmd_set_password(args):
         json.dump(config, f, indent=2, ensure_ascii=False)
 
     print(f"Web password set (SHA-256 hash stored in {config_path})")
+
+
+def _read_config():
+    """Read raw config.json."""
+    import json
+    from depensage.config.settings import get_config_path
+    config_path = get_config_path(None)
+    with open(config_path) as f:
+        return json.load(f), config_path
+
+
+def _write_config(config, config_path):
+    """Write config.json back."""
+    import json
+    with open(config_path, "w") as f:
+        json.dump(config, f, indent=2, ensure_ascii=False)
+
+
+def cmd_config_show(args):
+    """Show current configuration."""
+    config, config_path = _read_config()
+    print(f"Config: {config_path}\n")
+
+    spreadsheets = config.get("spreadsheets", {})
+    print(f"Spreadsheets ({len(spreadsheets)}):")
+    for key, entry in spreadsheets.items():
+        parts = [f"id={entry['id'][:20]}..."]
+        if "year" in entry:
+            parts.append(f"year={entry['year']}")
+        if entry.get("default"):
+            parts.append("DEFAULT")
+        print(f"  {key}: {', '.join(parts)}")
+
+    print(f"\nCredentials: {config.get('credentials_file', '(not set)')}")
+    if config.get("default_savings_goal"):
+        print(f"Default savings goal: {config['default_savings_goal']}")
+    if config.get("web_password"):
+        print("Web password: (set)")
+
+
+def cmd_config_add(args):
+    """Add or update a spreadsheet entry."""
+    config, config_path = _read_config()
+
+    if "spreadsheets" not in config:
+        config["spreadsheets"] = {}
+
+    entry = {"id": args.spreadsheet_id}
+    if args.year:
+        entry["year"] = args.year
+    if args.default:
+        entry["default"] = True
+
+    existing = args.key in config["spreadsheets"]
+    config["spreadsheets"][args.key] = entry
+
+    # If setting as default, unset other defaults for the same year
+    if args.default and args.year:
+        for k, e in config["spreadsheets"].items():
+            if k != args.key and e.get("year") == args.year:
+                e.pop("default", None)
+
+    _write_config(config, config_path)
+    action = "Updated" if existing else "Added"
+    print(f"{action} spreadsheet '{args.key}': id={args.spreadsheet_id}"
+          + (f", year={args.year}" if args.year else "")
+          + (" (default)" if args.default else ""))
+
+
+def cmd_config_remove(args):
+    """Remove a spreadsheet entry."""
+    config, config_path = _read_config()
+
+    if args.key not in config.get("spreadsheets", {}):
+        print(f"Spreadsheet '{args.key}' not found.", file=sys.stderr)
+        sys.exit(1)
+
+    del config["spreadsheets"][args.key]
+    _write_config(config, config_path)
+    print(f"Removed spreadsheet '{args.key}'")
+
+
+def cmd_config_set(args):
+    """Set a config value."""
+    config, config_path = _read_config()
+
+    if args.key == "default_savings_goal":
+        config["default_savings_goal"] = args.value
+    elif args.key == "credentials_file":
+        if not os.path.exists(args.value):
+            print(f"Warning: file '{args.value}' does not exist", file=sys.stderr)
+        config["credentials_file"] = args.value
+    else:
+        print(f"Unknown config key: {args.key}", file=sys.stderr)
+        print("Valid keys: credentials_file, default_savings_goal")
+        sys.exit(1)
+
+    _write_config(config, config_path)
+    print(f"Set {args.key} = {args.value}")

@@ -13,6 +13,7 @@ from depensage.sheets.cli_commands import (
     cmd_list_sheets, cmd_read, cmd_formulas, cmd_metadata,
     cmd_build_lookup, cmd_process, cmd_commit, cmd_carryover,
     cmd_consolidate_patterns, cmd_verify, cmd_set_password,
+    cmd_config_show, cmd_config_add, cmd_config_remove, cmd_config_set,
 )
 from depensage.sheets.cli_review import (
     cmd_review, cmd_review_bank, cmd_review_income,
@@ -127,6 +128,35 @@ def main():
         help="Password to set (omit to be prompted securely)",
     )
 
+    # Config management
+    subparsers.add_parser("config", help="Show current configuration")
+
+    config_add_parser = subparsers.add_parser(
+        "config-add", help="Add or update a spreadsheet entry"
+    )
+    config_add_parser.add_argument("key", help="Config key (e.g. 2027, 2027_dev)")
+    config_add_parser.add_argument("spreadsheet_id", help="Google Spreadsheet ID")
+    config_add_parser.add_argument(
+        "--year", type=int, help="Year this spreadsheet covers"
+    )
+    config_add_parser.add_argument(
+        "--default", action="store_true",
+        help="Set as default for its year",
+    )
+
+    config_rm_parser = subparsers.add_parser(
+        "config-remove", help="Remove a spreadsheet entry"
+    )
+    config_rm_parser.add_argument("key", help="Config key to remove")
+
+    config_set_parser = subparsers.add_parser(
+        "config-set", help="Set a config value (credentials_file, default_savings_goal)"
+    )
+    config_set_parser.add_argument(
+        "key", help="Config key (credentials_file or default_savings_goal)"
+    )
+    config_set_parser.add_argument("value", help="Value to set")
+
     args = parser.parse_args()
     if not args.command:
         parser.print_help()
@@ -147,6 +177,10 @@ def main():
         "verify": cmd_verify,
         "consolidate-patterns": cmd_consolidate_patterns,
         "set-password": cmd_set_password,
+        "config": cmd_config_show,
+        "config-add": cmd_config_add,
+        "config-remove": cmd_config_remove,
+        "config-set": cmd_config_set,
     }
     commands[args.command](args)
 
