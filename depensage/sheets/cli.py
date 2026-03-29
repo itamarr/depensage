@@ -13,7 +13,8 @@ from depensage.sheets.cli_commands import (
     cmd_list_sheets, cmd_read, cmd_formulas, cmd_metadata,
     cmd_build_lookup, cmd_process, cmd_commit, cmd_carryover,
     cmd_consolidate_patterns, cmd_verify, cmd_set_password,
-    cmd_config_show, cmd_config_add, cmd_config_remove, cmd_config_set,
+    cmd_config_show, cmd_config_add, cmd_config_update, cmd_config_remove,
+    cmd_config_set,
 )
 from depensage.sheets.cli_review import (
     cmd_review, cmd_review_bank, cmd_review_income,
@@ -144,6 +145,22 @@ def main():
         help="Set as default for its year",
     )
 
+    config_update_parser = subparsers.add_parser(
+        "config-update", help="Update an existing spreadsheet entry"
+    )
+    config_update_parser.add_argument("key", help="Config key to update")
+    config_update_parser.add_argument(
+        "--id", dest="spreadsheet_id",
+        help="New Google Spreadsheet ID",
+    )
+    config_update_parser.add_argument(
+        "--year", type=int, help="New year",
+    )
+    config_update_parser.add_argument(
+        "--default", action="store_true",
+        help="Set as default for its year",
+    )
+
     config_rm_parser = subparsers.add_parser(
         "config-remove", help="Remove a spreadsheet entry"
     )
@@ -179,6 +196,7 @@ def main():
         "set-password": cmd_set_password,
         "config": cmd_config_show,
         "config-add": cmd_config_add,
+        "config-update": cmd_config_update,
         "config-remove": cmd_config_remove,
         "config-set": cmd_config_set,
     }

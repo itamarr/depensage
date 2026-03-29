@@ -731,11 +731,19 @@ def cmd_config_show(args):
 
 
 def cmd_config_add(args):
-    """Add or update a spreadsheet entry."""
+    """Add a new spreadsheet entry. Refuses to overwrite — use config-update."""
     config, config_path = _read_config()
 
     if "spreadsheets" not in config:
         config["spreadsheets"] = {}
+
+    if args.key in config["spreadsheets"]:
+        print(
+            f"Spreadsheet '{args.key}' already exists. "
+            f"Use config-update to modify it.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
 
     entry = {"id": args.spreadsheet_id}
     if args.year:
@@ -743,20 +751,69 @@ def cmd_config_add(args):
     if args.default:
         entry["default"] = True
 
-    existing = args.key in config["spreadsheets"]
     config["spreadsheets"][args.key] = entry
 
-    # If setting as default, unset other defaults for the same year
     if args.default and args.year:
         for k, e in config["spreadsheets"].items():
             if k != args.key and e.get("year") == args.year:
                 e.pop("default", None)
 
     _write_config(config, config_path)
-    action = "Updated" if existing else "Added"
-    print(f"{action} spreadsheet '{args.key}': id={args.spreadsheet_id}"
+    print(f"Added spreadsheet '{args.key}': id={args.spreadsheet_id}"
           + (f", year={args.year}" if args.year else "")
           + (" (default)" if args.default else ""))
+
+
+def cmd_config_update(args):
+    """Update an existing spreadsheet entry (with confirmation)."""
+    config, config_path = _read_config()
+
+    if args.key not in config.get("spreadsheets", {}):
+        print(f"Spreadsheet '{args.key}' not found. Use config-add to create it.",
+              file=sys.stderr)
+        sys.exit(1)
+
+    old = config["spreadsheets"][args.key]
+    old_parts = [f"id={old['id'][:20]}..."]
+    if "year" in old:
+        old_parts.append(f"year={old['year']}")
+    if old.get("default"):
+        old_parts.append("DEFAULT")
+
+    new_entry = dict(old)  # start from existing
+    if args.spreadsheet_id:
+        new_entry["id"] = args.spreadsheet_id
+    if args.year is not None:
+        new_entry["year"] = args.year
+    if args.default:
+        new_entry["default"] = True
+
+    new_parts = [f"id={new_entry['id'][:20]}..."]
+    if "year" in new_entry:
+        new_parts.append(f"year={new_entry['year']}")
+    if new_entry.get("default"):
+        new_parts.append("DEFAULT")
+
+    print(f"  Current: {', '.join(old_parts)}")
+    print(f"  New:     {', '.join(new_parts)}")
+
+    try:
+        confirm = input("Update? [y/N] ").strip().lower()
+    except EOFError:
+        confirm = "n"
+    if confirm != "y":
+        print("Aborted.")
+        return
+
+    config["spreadsheets"][args.key] = new_entry
+
+    if args.default and new_entry.get("year"):
+        for k, e in config["spreadsheets"].items():
+            if k != args.key and e.get("year") == new_entry["year"]:
+                e.pop("default", None)
+
+    _write_config(config, config_path)
+    print(f"Updated spreadsheet '{args.key}'")
 
 
 def cmd_config_remove(args):
