@@ -4,6 +4,7 @@
 	import CategoryPicker from '$lib/components/CategoryPicker.svelte';
 	import { uploadFiles, post, get, put, subscribeProgress } from '$lib/api';
 	import { sessionId } from '$lib/stores';
+	import { beforeNavigate } from '$app/navigation';
 
 	type StagedResult = {
 		total_parsed: number;
@@ -49,6 +50,23 @@
 
 	// Wizard steps: 1=upload, 2=running, 3=review/edit, 4=changes, 5=done
 	let step = $state(1);
+
+	// Warn before navigating away with unsaved pipeline state
+	beforeNavigate(({ cancel }) => {
+		if (step > 1 && step < 5) {
+			if (!confirm('Pipeline is in progress. Leave and discard staged data?')) {
+				cancel();
+			}
+		}
+	});
+
+	$effect(() => {
+		if (step > 1 && step < 5) {
+			const handler = (e: BeforeUnloadEvent) => { e.preventDefault(); };
+			window.addEventListener('beforeunload', handler);
+			return () => window.removeEventListener('beforeunload', handler);
+		}
+	});
 	let pendingFiles = $state<File[]>([]);  // accumulated locally before upload
 	let spreadsheetKey = $state('');
 	let progressStage = $state('');
