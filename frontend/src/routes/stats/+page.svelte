@@ -1,0 +1,7 @@
+<h1 class="text-2xl font-bold text-gray-800 mb-6">Statistics</h1>
+
+<div class="bg-white rounded-lg shadow border border-gray-200 p-8 text-center">
+	<div class="text-4xl mb-4">📈</div>
+	<h2 class="text-lg font-medium text-gray-600">Coming Soon</h2>
+	<p class="text-sm text-gray-400 mt-2">Average spending per category, savings breakdown, month-over-month trends.</p>
+</div>

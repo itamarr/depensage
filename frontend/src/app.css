@@ -1,0 +1,7 @@
+@import "tailwindcss";
+
+/* Hebrew data cells: right-to-left */
+.rtl {
+	direction: rtl;
+	text-align: right;
+}
