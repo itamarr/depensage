@@ -153,14 +153,14 @@
 </script>
 
 <div class="max-w-5xl">
-	<h1 class="text-2xl font-bold text-gray-800 mb-6">Process Statements</h1>
+	<h1 class="text-2xl font-bold text-primary-800 mb-6">Process Statements</h1>
 
 	<!-- Step indicator -->
 	<div class="flex items-center gap-2 mb-8 text-sm">
 		{#each [{ n: 1, label: 'Upload' }, { n: 2, label: 'Processing' }, { n: 3, label: 'Review' }, { n: 4, label: 'Done' }] as s}
 			<div class="flex items-center gap-2">
 				<span class="w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold
-					{step >= s.n ? 'bg-blue-600 text-white' : 'bg-gray-200 text-gray-500'}">
+					{step >= s.n ? 'bg-primary-600 text-white' : 'bg-gray-200 text-gray-500'}">
 					{s.n}
 				</span>
 				<span class="{step >= s.n ? 'text-gray-800' : 'text-gray-400'}">{s.label}</span>
@@ -183,7 +183,7 @@
 		<FileUpload onFilesSelected={handleUpload} />
 
 		{#if uploadedFiles.length > 0}
-			<div class="mt-4 p-4 bg-white rounded-lg shadow border border-gray-200">
+			<div class="mt-4 p-4 bg-white rounded-xl shadow-sm border border-gray-200">
 				<h3 class="font-medium text-gray-700 mb-2">Uploaded files</h3>
 				<ul class="text-sm text-gray-600 space-y-1">
 					{#each uploadedFiles as f}
@@ -207,7 +207,7 @@
 					<button
 						onclick={runPipeline}
 						disabled={!spreadsheetKey || loading}
-						class="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50 text-sm font-medium"
+						class="px-4 py-2 bg-primary-600 text-white rounded hover:bg-primary-700 disabled:opacity-50 text-sm font-medium"
 					>
 						Run Pipeline
 					</button>
@@ -218,7 +218,7 @@
 
 	<!-- Step 2: Processing -->
 	{#if step === 2}
-		<div class="bg-white rounded-lg shadow border border-gray-200 p-6">
+		<div class="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
 			<h2 class="text-lg font-medium text-gray-700 mb-4">Processing...</h2>
 			<ProgressBar stage={progressStage} percent={progressPercent} error={progressError} />
 		</div>
@@ -228,7 +228,7 @@
 	{#if step === 3 && stagedResult}
 		<div class="space-y-4">
 			<!-- Summary -->
-			<div class="bg-white rounded-lg shadow border border-gray-200 p-6">
+			<div class="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
 				<h2 class="text-lg font-medium text-gray-700 mb-3">Pipeline Summary</h2>
 				<div class="grid grid-cols-4 gap-4 text-center">
 					<div>
@@ -252,7 +252,7 @@
 
 			<!-- Per-month details -->
 			{#each stagedResult.months as m}
-				<div class="bg-white rounded-lg shadow border border-gray-200 p-4">
+				<div class="bg-white rounded-xl shadow-sm border border-gray-200 p-4">
 					<button
 						onclick={() => loadMonthDetail(m.month, m.year)}
 						class="w-full text-left"
@@ -415,7 +415,7 @@
 
 	<!-- Step 4: Done -->
 	{#if step === 4 && commitResult}
-		<div class="bg-white rounded-lg shadow border border-green-200 p-6">
+		<div class="bg-white rounded-xl shadow-sm border border-green-200 p-6">
 			<div class="text-center">
 				<div class="text-4xl mb-3">✅</div>
 				<h2 class="text-xl font-bold text-green-700 mb-4">Committed Successfully</h2>
@@ -430,7 +430,7 @@
 
 				<button
 					onclick={reset}
-					class="mt-6 px-5 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 font-medium"
+					class="mt-6 px-5 py-2 bg-primary-600 text-white rounded hover:bg-primary-700 font-medium"
 				>
 					Process More Statements
 				</button>

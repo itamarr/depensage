@@ -1,5 +1,33 @@
 @import "tailwindcss";
 
+@theme {
+	/* Banner-inspired palette: steel blue, copper/amber, warm grays */
+	--color-primary-50: #f0f7fa;
+	--color-primary-100: #d9edf4;
+	--color-primary-200: #b3dbe9;
+	--color-primary-300: #7cc0d6;
+	--color-primary-400: #4a9ab4;
+	--color-primary-500: #3a7d94;
+	--color-primary-600: #2f6577;
+	--color-primary-700: #295463;
+	--color-primary-800: #264652;
+	--color-primary-900: #1e3844;
+
+	--color-accent-50: #fdf8ed;
+	--color-accent-100: #f9eed0;
+	--color-accent-200: #f2da9e;
+	--color-accent-300: #ebc46c;
+	--color-accent-400: #e5af42;
+	--color-accent-500: #d4952a;
+	--color-accent-600: #b87420;
+	--color-accent-700: #99561d;
+	--color-accent-800: #7d441e;
+	--color-accent-900: #68391c;
+
+	--color-slate-750: #293545;
+	--color-slate-850: #1a2332;
+}
+
 /* Hebrew data cells: right-to-left */
 .rtl {
 	direction: rtl;
