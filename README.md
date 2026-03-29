@@ -105,12 +105,43 @@ python -m depensage.sheets.cli -s 2025 read January B2:G10
 python -m depensage.sheets.cli -s 2025 formulas January E130:E140
 ```
 
+## Web App
+
+The web app provides a visual interface for the full pipeline workflow.
+
+### Build & Run
+
+```bash
+# Install web dependencies
+uv pip install fastapi "uvicorn[standard]" python-multipart
+
+# Build frontend (requires Node.js 18+)
+npm install --prefix frontend
+npm run build --prefix frontend
+cp -r frontend/build depensage/web/static
+
+# Add password to .secrets/config.json
+# "web_password": "your-password"
+
+# Run (HTTP for local dev)
+python -m depensage.web.main --no-ssl
+
+# Run (HTTPS for production)
+python -m depensage.web.main
+```
+
+Access at `http://localhost:8000` or `https://<your-ip>:8000` from any device on your network.
+
+See [docs/webapp.md](docs/webapp.md) for full architecture, API reference, and deployment details.
+
 ## Project Structure
 
 - **`engine/`** — Core pipeline: `virtual_month.py` (in-memory month representation), `pipeline.py` (sequential orchestrator), `carryover.py` (budget/savings carry), `savings_allocator.py`, `staging.py` (XLSX export/import), `dedup.py`, `formatter.py`, `statement_parser.py`, `bank_parser.py`, `verification.py`
 - **`classifier/`** — Lookup-based classifiers (CC, bank, income) with exact + prefix patterns
 - **`sheets/`** — Google Sheets API integration (`spreadsheet_handler.py`) and CLI (`cli.py`, `cli_commands.py`)
+- **`web/`** — FastAPI backend (`app.py`, `routers/`) serving both API and Svelte frontend
 - **`config/`** — Settings management
+- **`frontend/`** — Svelte/SvelteKit SPA source (builds to `web/static/`)
 - **`scripts/`** — One-time migration scripts
 
 ## Development
@@ -118,6 +149,9 @@ python -m depensage.sheets.cli -s 2025 formulas January E130:E140
 ```bash
 source .venv/bin/activate
 python -m unittest discover    # Run all tests (195)
+
+# Frontend live-reload (for UI development)
+npm run dev --prefix frontend  # Proxies /api to backend at :8000
 ```
 
 ## License
