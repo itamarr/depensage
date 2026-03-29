@@ -49,7 +49,7 @@
 
 	// Wizard steps: 1=upload, 2=running, 3=review/edit, 4=changes, 5=done
 	let step = $state(1);
-	let uploadedFiles = $state<string[]>([]);
+	let pendingFiles = $state<File[]>([]);  // accumulated locally before upload
 	let spreadsheetKey = $state('');
 	let progressStage = $state('');
 	let progressPercent = $state(0);
@@ -75,18 +75,34 @@
 			.catch(() => {});
 	});
 
-	async function handleUpload(files: FileList) {
-		error = ''; loading = true;
-		try {
-			const res = await uploadFiles(files);
-			$sessionId = res.session_id;
-			uploadedFiles = res.files;
-		} catch (e: any) { error = e.message; }
-		loading = false;
+	function handleFilesAdded(files: FileList) {
+		// Accumulate files — allow multiple drops/selections
+		const existing = new Set(pendingFiles.map(f => f.name));
+		for (const f of files) {
+			if (!existing.has(f.name)) {
+				pendingFiles = [...pendingFiles, f];
+			}
+		}
+	}
+
+	function removeFile(name: string) {
+		pendingFiles = pendingFiles.filter(f => f.name !== name);
 	}
 
 	async function runPipeline() {
-		if (!$sessionId || !spreadsheetKey) return;
+		if (!pendingFiles.length || !spreadsheetKey) return;
+
+		// Upload all accumulated files at once
+		error = ''; loading = true;
+		try {
+			const fileList = new DataTransfer();
+			for (const f of pendingFiles) fileList.items.add(f);
+			const res = await uploadFiles(fileList.files);
+			$sessionId = res.session_id;
+		} catch (e: any) { error = e.message; loading = false; return; }
+		loading = false;
+
+		if (!$sessionId) return;
 		error = ''; step = 2;
 		progressStage = 'starting'; progressPercent = 0; progressError = null;
 		try {
@@ -184,7 +200,7 @@
 	}
 
 	function reset() {
-		step = 1; uploadedFiles = []; stagedResult = null; selectedMonth = null;
+		step = 1; pendingFiles = []; stagedResult = null; selectedMonth = null;
 		editingMonth = null; commitResult = null; changes = []; error = '';
 		$sessionId = null;
 	}
@@ -222,13 +238,19 @@
 
 	<!-- Step 1: Upload -->
 	{#if step === 1}
-		<FileUpload onFilesSelected={handleUpload} />
-		{#if uploadedFiles.length > 0}
+		<FileUpload onFilesSelected={handleFilesAdded} />
+		{#if pendingFiles.length > 0}
 			<div class="mt-4 p-4 bg-white rounded-xl shadow-sm" style="border: 1px solid #b3dbe9;">
-				<h3 class="font-medium text-gray-700 mb-2">Uploaded files</h3>
+				<h3 class="font-medium text-gray-700 mb-2">Files to process ({pendingFiles.length})</h3>
 				<ul class="text-sm text-gray-600 space-y-1">
-					{#each uploadedFiles as f}<li>📄 {f}</li>{/each}
+					{#each pendingFiles as f}
+						<li class="flex items-center justify-between">
+							<span>📄 {f.name}</span>
+							<button onclick={() => removeFile(f.name)} class="text-red-400 hover:text-red-600 text-xs ml-2">remove</button>
+						</li>
+					{/each}
 				</ul>
+				<p class="text-xs text-gray-400 mt-2">Drop more files or click the zone above to add more.</p>
 				<div class="mt-4 flex items-center gap-4">
 					<label class="text-sm text-gray-600">
 						Spreadsheet:
@@ -240,7 +262,7 @@
 					</label>
 					<button onclick={runPipeline} disabled={!spreadsheetKey || loading}
 						class="px-4 py-2 bg-primary-600 text-white rounded hover:bg-primary-700 disabled:opacity-50 text-sm font-medium">
-						Run Pipeline
+						{loading ? 'Uploading...' : 'Run Pipeline'}
 					</button>
 				</div>
 			</div>

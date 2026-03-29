@@ -331,8 +331,11 @@ def run_pipeline(statement_paths, handlers, classifier, year=None,
             )
 
         # --- Step 6: Savings allocation ---
+        # Only allocate if we have a real savings budget (set by carryover
+        # from a month with income). Skip if budget is 0 from template
+        # default or missing carryover — don't zero out preset allocations.
         budget = vm.savings_budget_value
-        if budget is not None and vm.savings_lines:
+        if budget is not None and budget > 0 and vm.savings_lines:
             goals = [
                 SavingsGoal(
                     goal_name=sl.goal_name,
@@ -354,6 +357,17 @@ def run_pipeline(statement_paths, handlers, classifier, year=None,
                     f"presets={alloc_result.total_preset:,.2f}, "
                     f"surplus={alloc_result.surplus:,.2f}"
                 )
+        elif budget is not None and budget <= 0 and vm.savings_lines:
+            # Budget is zero or negative — warn but don't zero allocations
+            stage.savings_warning = (
+                f"Savings budget is {budget:,.0f}. "
+                f"Skipping allocation to preserve existing presets. "
+                f"Process a bank transcript with income to set the budget."
+            )
+            logger.info(
+                f"Skipping savings allocation for {month_name}: "
+                f"budget={budget:,.2f} (no income data)"
+            )
 
     return staged
 
