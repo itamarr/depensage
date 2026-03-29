@@ -12,7 +12,7 @@ from depensage.classifier.cc_lookup import DEFAULT_LOOKUP_PATH
 from depensage.sheets.cli_commands import (
     cmd_list_sheets, cmd_read, cmd_formulas, cmd_metadata,
     cmd_build_lookup, cmd_process, cmd_commit, cmd_carryover,
-    cmd_consolidate_patterns, cmd_verify,
+    cmd_consolidate_patterns, cmd_verify, cmd_set_password,
 )
 from depensage.sheets.cli_review import (
     cmd_review, cmd_review_bank, cmd_review_income,
@@ -119,6 +119,14 @@ def main():
         help="Find duplicate exact entries that should be prefix patterns",
     )
 
+    set_password_parser = subparsers.add_parser(
+        "set-password", help="Set the web app login password"
+    )
+    set_password_parser.add_argument(
+        "password", nargs="?",
+        help="Password to set (omit to be prompted securely)",
+    )
+
     args = parser.parse_args()
     if not args.command:
         parser.print_help()
@@ -138,6 +146,7 @@ def main():
         "carryover": cmd_carryover,
         "verify": cmd_verify,
         "consolidate-patterns": cmd_consolidate_patterns,
+        "set-password": cmd_set_password,
     }
     commands[args.command](args)
 

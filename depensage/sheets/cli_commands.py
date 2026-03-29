@@ -656,3 +656,37 @@ def cmd_consolidate_patterns(args):
         print()
 
     print(f"Applied {applied} pattern(s). Lookup table updated.")
+
+
+def cmd_set_password(args):
+    """Set the web app login password (stored as SHA-256 hash in config)."""
+    import getpass
+    import hashlib
+    import json
+
+    from depensage.config.settings import get_config_path
+
+    password = args.password
+    if not password:
+        password = getpass.getpass("Enter web password: ")
+        confirm = getpass.getpass("Confirm password: ")
+        if password != confirm:
+            print("Passwords don't match.", file=sys.stderr)
+            sys.exit(1)
+
+    if not password:
+        print("Password cannot be empty.", file=sys.stderr)
+        sys.exit(1)
+
+    hashed = hashlib.sha256(password.encode()).hexdigest()
+
+    config_path = get_config_path(None)
+    with open(config_path) as f:
+        config = json.load(f)
+
+    config["web_password"] = hashed
+
+    with open(config_path, "w") as f:
+        json.dump(config, f, indent=2, ensure_ascii=False)
+
+    print(f"Web password set (SHA-256 hash stored in {config_path})")
