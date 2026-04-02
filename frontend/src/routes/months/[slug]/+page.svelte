@@ -23,9 +23,43 @@
 	let loading = $state(false);
 	let error = $state('');
 
+	// Sort state
+	let sortKey = $state('');
+	let sortAsc = $state(true);
+
+	function toggleSort(key: string) {
+		if (sortKey === key) {
+			sortAsc = !sortAsc;
+		} else {
+			sortKey = key;
+			sortAsc = true;
+		}
+	}
+
+	function sortIndicator(key: string): string {
+		if (sortKey !== key) return '';
+		return sortAsc ? ' ▲' : ' ▼';
+	}
+
+	function sorted<T>(items: T[], key: string): T[] {
+		if (!sortKey) return items;
+		return [...items].sort((a: any, b: any) => {
+			let va = a[key], vb = b[key];
+			// Try numeric comparison
+			const na = parseFloat(va), nb = parseFloat(vb);
+			if (!isNaN(na) && !isNaN(nb)) {
+				return sortAsc ? na - nb : nb - na;
+			}
+			// String comparison
+			va = String(va || ''); vb = String(vb || '');
+			return sortAsc ? va.localeCompare(vb) : vb.localeCompare(va);
+		});
+	}
+
 	async function loadTab(tab: typeof activeTab) {
 		activeTab = tab;
 		loading = true; error = '';
+		sortKey = ''; sortAsc = true; // Reset sort when switching tabs
 		try {
 			if (tab === 'expenses') {
 				const data = await get<{ expenses: Expense[] }>(`/months/${year}/${month}/expenses`);
@@ -90,22 +124,28 @@
 
 		{:else if activeTab === 'expenses'}
 			<div class="overflow-x-auto">
+				<!-- Column order: B(Business) C(Notes) D(Subcat) E(Amount) F(Category) G(Date) H(Status) -->
 				<table class="w-full text-sm">
 					<thead style="background: #f0f7fa;">
-						<!-- Column order matches spreadsheet B→H -->
 						<tr>
-							<th class="px-2 py-1.5 text-right text-xs font-medium text-gray-600">Status</th>
-							<th class="px-2 py-1.5 text-left text-xs font-medium text-gray-600">Date</th>
-							<th class="px-2 py-1.5 text-left text-xs font-medium text-gray-600 rtl">Category</th>
-							<th class="px-2 py-1.5 text-right text-xs font-medium text-gray-600">Amount</th>
-							<th class="px-2 py-1.5 text-left text-xs font-medium text-gray-600 rtl">Subcat</th>
-							<th class="px-2 py-1.5 text-left text-xs font-medium text-gray-600 rtl">Notes</th>
-							<th class="px-2 py-1.5 text-left text-xs font-medium text-gray-600 rtl">Business</th>
+							<th class="sortable-th rtl" onclick={() => toggleSort('business_name')}>Business{sortIndicator('business_name')}</th>
+							<th class="sortable-th rtl" onclick={() => toggleSort('notes')}>Notes{sortIndicator('notes')}</th>
+							<th class="sortable-th rtl" onclick={() => toggleSort('subcategory')}>Subcat{sortIndicator('subcategory')}</th>
+							<th class="sortable-th text-right" onclick={() => toggleSort('amount')}>Amount{sortIndicator('amount')}</th>
+							<th class="sortable-th rtl" onclick={() => toggleSort('category')}>Category{sortIndicator('category')}</th>
+							<th class="sortable-th" onclick={() => toggleSort('date')}>Date{sortIndicator('date')}</th>
+							<th class="sortable-th" onclick={() => toggleSort('status')}>Status{sortIndicator('status')}</th>
 						</tr>
 					</thead>
 					<tbody>
-						{#each expenses as exp}
+						{#each sorted(expenses, sortKey) as exp}
 							<tr class="border-t hover:bg-gray-50">
+								<td class="px-2 py-1 text-xs rtl">{exp.business_name}</td>
+								<td class="px-2 py-1 text-xs rtl">{exp.notes}</td>
+								<td class="px-2 py-1 text-xs rtl">{exp.subcategory}</td>
+								<td class="px-2 py-1 text-xs text-right">{exp.amount}</td>
+								<td class="px-2 py-1 text-xs rtl">{exp.category}</td>
+								<td class="px-2 py-1 text-xs whitespace-nowrap">{exp.date}</td>
 								<td class="px-2 py-1">
 									{#if exp.status === 'CC'}
 										<span class="text-xs px-1 rounded" style="background: #d9edf4; color: #2f6577;">CC</span>
@@ -115,12 +155,6 @@
 										<span class="text-xs text-gray-400">pending</span>
 									{/if}
 								</td>
-								<td class="px-2 py-1 text-xs whitespace-nowrap">{exp.date}</td>
-								<td class="px-2 py-1 text-xs rtl">{exp.category}</td>
-								<td class="px-2 py-1 text-xs text-right">{exp.amount}</td>
-								<td class="px-2 py-1 text-xs rtl">{exp.subcategory}</td>
-								<td class="px-2 py-1 text-xs rtl">{exp.notes}</td>
-								<td class="px-2 py-1 text-xs rtl">{exp.business_name}</td>
 							</tr>
 						{/each}
 					</tbody>
@@ -132,7 +166,6 @@
 
 		{:else if activeTab === 'budget'}
 			<div class="space-y-6">
-				<!-- Budget lines -->
 				<div>
 					<h3 class="text-sm font-medium text-primary-600 mb-2">Budget</h3>
 					{#if savingsBudget != null}
@@ -141,20 +174,20 @@
 						</p>
 					{/if}
 					<div class="overflow-x-auto">
-						<!-- Column order matches spreadsheet B→H -->
+						<!-- Column order: B(Remaining) D(Budget) E(Accumulated) F(Subcat) G(Category) H(Flag) -->
 						<table class="w-full text-sm">
 							<thead style="background: #f0f7fa;">
 								<tr>
-									<th class="px-2 py-1.5 text-right text-xs font-medium text-gray-600">Remaining</th>
-									<th class="px-2 py-1.5 text-right text-xs font-medium text-gray-600">Budget</th>
-									<th class="px-2 py-1.5 text-right text-xs font-medium text-gray-600">Accumulated</th>
-									<th class="px-2 py-1.5 text-left text-xs font-medium text-gray-600 rtl">Subcat</th>
-									<th class="px-2 py-1.5 text-left text-xs font-medium text-gray-600 rtl">Category</th>
-									<th class="px-2 py-1.5 text-center text-xs font-medium text-gray-600">Flag</th>
+									<th class="sortable-th text-right" onclick={() => toggleSort('remaining')}>Remaining{sortIndicator('remaining')}</th>
+									<th class="sortable-th text-right" onclick={() => toggleSort('budget_amount')}>Budget{sortIndicator('budget_amount')}</th>
+									<th class="sortable-th text-right" onclick={() => toggleSort('accumulated')}>Accumulated{sortIndicator('accumulated')}</th>
+									<th class="sortable-th rtl" onclick={() => toggleSort('subcategory')}>Subcat{sortIndicator('subcategory')}</th>
+									<th class="sortable-th rtl" onclick={() => toggleSort('category')}>Category{sortIndicator('category')}</th>
+									<th class="sortable-th text-center" onclick={() => toggleSort('carry_status')}>Flag{sortIndicator('carry_status')}</th>
 								</tr>
 							</thead>
 							<tbody>
-								{#each budgetLines as bl}
+								{#each sorted(budgetLines, sortKey) as bl}
 									<tr class="border-t hover:bg-gray-50">
 										<td class="px-2 py-1 text-xs text-right font-medium
 											{bl.remaining < 0 ? 'text-red-500' : bl.remaining > bl.budget_amount ? 'text-green-600' : ''}">
@@ -178,24 +211,23 @@
 					</div>
 				</div>
 
-				<!-- Savings lines -->
 				<div>
 					<h3 class="text-sm font-medium text-primary-600 mb-2">Savings Goals</h3>
 					<div class="overflow-x-auto">
-						<!-- Column order matches spreadsheet A→G -->
+						<!-- Column order: B(Target) C(Total) D(Outgoing) E(Incoming) F(Accumulated) G(Goal) -->
 						<table class="w-full text-sm">
 							<thead style="background: #f0f7fa;">
 								<tr>
-									<th class="px-2 py-1.5 text-right text-xs font-medium text-gray-600">Target</th>
-									<th class="px-2 py-1.5 text-right text-xs font-medium text-gray-600">Total</th>
-									<th class="px-2 py-1.5 text-right text-xs font-medium text-gray-600">Outgoing</th>
-									<th class="px-2 py-1.5 text-right text-xs font-medium text-gray-600">Incoming</th>
-									<th class="px-2 py-1.5 text-right text-xs font-medium text-gray-600">Accumulated</th>
-									<th class="px-2 py-1.5 text-left text-xs font-medium text-gray-600 rtl">Goal</th>
+									<th class="sortable-th text-right" onclick={() => toggleSort('target')}>Target{sortIndicator('target')}</th>
+									<th class="sortable-th text-right" onclick={() => toggleSort('total')}>Total{sortIndicator('total')}</th>
+									<th class="sortable-th text-right" onclick={() => toggleSort('outgoing')}>Outgoing{sortIndicator('outgoing')}</th>
+									<th class="sortable-th text-right" onclick={() => toggleSort('incoming')}>Incoming{sortIndicator('incoming')}</th>
+									<th class="sortable-th text-right" onclick={() => toggleSort('accumulated')}>Accumulated{sortIndicator('accumulated')}</th>
+									<th class="sortable-th rtl" onclick={() => toggleSort('goal_name')}>Goal{sortIndicator('goal_name')}</th>
 								</tr>
 							</thead>
 							<tbody>
-								{#each savingsLines as sl}
+								{#each sorted(savingsLines, sortKey) as sl}
 									<tr class="border-t hover:bg-gray-50">
 										<td class="px-2 py-1 text-xs text-right">{sl.target ? fmtNum(sl.target) : ''}</td>
 										<td class="px-2 py-1 text-xs text-right font-medium">{fmtNum(sl.total)}</td>
@@ -213,22 +245,23 @@
 
 		{:else if activeTab === 'income'}
 			<div class="overflow-x-auto">
+				<!-- Column order: D(Comments) E(Amount) F(Category) G(Date) -->
 				<table class="w-full text-sm">
 					<thead style="background: #f0f7fa;">
 						<tr>
-							<th class="px-2 py-1.5 text-left text-xs font-medium text-gray-600">Date</th>
-							<th class="px-2 py-1.5 text-left text-xs font-medium text-gray-600 rtl">Comments</th>
-							<th class="px-2 py-1.5 text-right text-xs font-medium text-gray-600">Amount</th>
-							<th class="px-2 py-1.5 text-left text-xs font-medium text-gray-600 rtl">Category</th>
+							<th class="sortable-th rtl" onclick={() => toggleSort('comments')}>Comments{sortIndicator('comments')}</th>
+							<th class="sortable-th text-right" onclick={() => toggleSort('amount')}>Amount{sortIndicator('amount')}</th>
+							<th class="sortable-th rtl" onclick={() => toggleSort('category')}>Category{sortIndicator('category')}</th>
+							<th class="sortable-th" onclick={() => toggleSort('date')}>Date{sortIndicator('date')}</th>
 						</tr>
 					</thead>
 					<tbody>
-						{#each income as inc}
+						{#each sorted(income, sortKey) as inc}
 							<tr class="border-t hover:bg-gray-50">
-								<td class="px-2 py-1 text-xs whitespace-nowrap">{inc.date}</td>
 								<td class="px-2 py-1 text-xs rtl">{inc.comments}</td>
 								<td class="px-2 py-1 text-xs text-right">{inc.amount}</td>
 								<td class="px-2 py-1 text-xs rtl">{inc.category}</td>
+								<td class="px-2 py-1 text-xs whitespace-nowrap">{inc.date}</td>
 							</tr>
 						{/each}
 					</tbody>
@@ -240,3 +273,19 @@
 		{/if}
 	</div>
 </div>
+
+<style>
+	.sortable-th {
+		padding: 0.375rem 0.5rem;
+		font-size: 0.75rem;
+		font-weight: 500;
+		color: #4b5563;
+		cursor: pointer;
+		user-select: none;
+		white-space: nowrap;
+	}
+	.sortable-th:hover {
+		color: #2f6577;
+		background: #e8f0f4;
+	}
+</style>
