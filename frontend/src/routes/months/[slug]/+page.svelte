@@ -23,6 +23,10 @@
 	let loading = $state(false);
 	let error = $state('');
 
+	// Column visibility
+	let showStatus = $state(false);
+	let showFlag = $state(false);
+
 	// Sort state
 	let sortKey = $state('');
 	let sortAsc = $state(true);
@@ -123,8 +127,17 @@
 			<p class="text-gray-400 text-sm py-8 text-center">Loading...</p>
 
 		{:else if activeTab === 'expenses'}
+			<div class="flex items-center justify-between mb-2">
+				<p class="text-xs text-gray-500">
+					<span class="inline-block w-3 h-3 rounded" style="background: #e6f4ea; vertical-align: middle;"></span>
+					Green rows are already deducted from the checking account.
+				</p>
+				<button
+					onclick={() => showStatus = !showStatus}
+					class="text-xs text-gray-400 hover:text-primary-600"
+				>{showStatus ? 'Hide' : 'Show'} status column</button>
+			</div>
 			<div class="overflow-x-auto">
-				<!-- Column order: B(Business) C(Notes) D(Subcat) E(Amount) F(Category) G(Date) H(Status) -->
 				<table class="w-full text-sm">
 					<thead style="background: #f0f7fa;">
 						<tr>
@@ -134,27 +147,32 @@
 							<th class="sortable-th text-right" onclick={() => toggleSort('amount')}>Amount{sortIndicator('amount')}</th>
 							<th class="sortable-th rtl" onclick={() => toggleSort('category')}>Category{sortIndicator('category')}</th>
 							<th class="sortable-th" onclick={() => toggleSort('date')}>Date{sortIndicator('date')}</th>
-							<th class="sortable-th" onclick={() => toggleSort('status')}>Status{sortIndicator('status')}</th>
+							{#if showStatus}
+								<th class="sortable-th" onclick={() => toggleSort('status')}>Status{sortIndicator('status')}</th>
+							{/if}
 						</tr>
 					</thead>
 					<tbody>
 						{#each sorted(expenses, sortKey) as exp}
-							<tr class="border-t hover:bg-gray-50">
+							<tr class="border-t {exp.status ? '' : 'hover:bg-gray-50'}"
+								style={exp.status ? 'background-color: #e6f4ea;' : ''}>
 								<td class="px-2 py-1 text-xs rtl">{exp.business_name}</td>
 								<td class="px-2 py-1 text-xs rtl">{exp.notes}</td>
 								<td class="px-2 py-1 text-xs rtl">{exp.subcategory}</td>
 								<td class="px-2 py-1 text-xs text-right">{exp.amount}</td>
 								<td class="px-2 py-1 text-xs rtl">{exp.category}</td>
 								<td class="px-2 py-1 text-xs whitespace-nowrap">{exp.date}</td>
-								<td class="px-2 py-1">
-									{#if exp.status === 'CC'}
-										<span class="text-xs px-1 rounded" style="background: #d9edf4; color: #2f6577;">CC</span>
-									{:else if exp.status === 'BANK'}
-										<span class="text-xs bg-green-100 text-green-700 px-1 rounded">BANK</span>
-									{:else}
-										<span class="text-xs text-gray-400">pending</span>
-									{/if}
-								</td>
+								{#if showStatus}
+									<td class="px-2 py-1">
+										{#if exp.status === 'CC'}
+											<span class="text-xs px-1 rounded" style="background: #d9edf4; color: #2f6577;">CC</span>
+										{:else if exp.status === 'BANK'}
+											<span class="text-xs bg-green-100 text-green-700 px-1 rounded">BANK</span>
+										{:else}
+											<span class="text-xs text-gray-400">pending</span>
+										{/if}
+									</td>
+								{/if}
 							</tr>
 						{/each}
 					</tbody>
@@ -167,7 +185,13 @@
 		{:else if activeTab === 'budget'}
 			<div class="space-y-6">
 				<div>
-					<h3 class="text-sm font-medium text-primary-600 mb-2">Budget</h3>
+					<div class="flex items-center justify-between mb-2">
+						<h3 class="text-sm font-medium text-primary-600">Budget</h3>
+						<button
+							onclick={() => showFlag = !showFlag}
+							class="text-xs text-gray-400 hover:text-primary-600"
+						>{showFlag ? 'Hide' : 'Show'} flag column</button>
+					</div>
 					{#if savingsBudget != null}
 						<p class="text-xs text-gray-500 mb-2">Savings budget: {fmtNum(savingsBudget)} ₪
 							{#if incomeTotal != null} (from income: {fmtNum(incomeTotal)} ₪){/if}
@@ -183,7 +207,9 @@
 									<th class="sortable-th text-right" onclick={() => toggleSort('accumulated')}>Accumulated{sortIndicator('accumulated')}</th>
 									<th class="sortable-th rtl" onclick={() => toggleSort('subcategory')}>Subcat{sortIndicator('subcategory')}</th>
 									<th class="sortable-th rtl" onclick={() => toggleSort('category')}>Category{sortIndicator('category')}</th>
-									<th class="sortable-th text-center" onclick={() => toggleSort('carry_status')}>Flag{sortIndicator('carry_status')}</th>
+									{#if showFlag}
+										<th class="sortable-th text-center" onclick={() => toggleSort('carry_status')}>Flag{sortIndicator('carry_status')}</th>
+									{/if}
 								</tr>
 							</thead>
 							<tbody>
@@ -197,13 +223,15 @@
 										<td class="px-2 py-1 text-xs text-right">{bl.accumulated ? fmtNum(bl.accumulated) : ''}</td>
 										<td class="px-2 py-1 text-xs rtl">{bl.subcategory}</td>
 										<td class="px-2 py-1 text-xs rtl font-medium">{bl.category}</td>
-										<td class="px-2 py-1 text-center">
-											{#if bl.carry_status === 'CARRY'}
-												<span class="text-xs px-1 rounded" style="background: #fdf8ed; color: #b87420;">CARRY</span>
-											{:else if bl.carry_status === 'IGNORE'}
-												<span class="text-xs px-1 rounded" style="background: #f0f0f0; color: #6b7280;">IGNORE</span>
-											{/if}
-										</td>
+										{#if showFlag}
+											<td class="px-2 py-1 text-center">
+												{#if bl.carry_status === 'CARRY'}
+													<span class="text-xs px-1 rounded" style="background: #fdf8ed; color: #b87420;">CARRY</span>
+												{:else if bl.carry_status === 'IGNORE'}
+													<span class="text-xs px-1 rounded" style="background: #f0f0f0; color: #6b7280;">IGNORE</span>
+												{/if}
+											</td>
+										{/if}
 									</tr>
 								{/each}
 							</tbody>
