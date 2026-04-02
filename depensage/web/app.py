@@ -12,7 +12,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 
 from depensage.web.auth import get_session_token, validate_session
 from depensage.web.session import SessionStore
-from depensage.web.routers import system, pipeline, staging
+from depensage.web.routers import system, pipeline, staging, lookups, categories, months
 
 
 # Paths that don't require authentication
@@ -72,6 +72,9 @@ def create_app() -> FastAPI:
     app.include_router(system.router)
     app.include_router(pipeline.router)
     app.include_router(staging.router)
+    app.include_router(lookups.router)
+    app.include_router(categories.router)
+    app.include_router(months.router)
 
     # Background task: sweep expired sessions every 5 minutes
     @app.on_event("startup")

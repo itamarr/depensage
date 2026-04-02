@@ -1,6 +1,59 @@
-<h1 class="text-2xl font-bold text-primary-800 mb-6">Months</h1>
-<div class="bg-white rounded-xl shadow-sm border border-gray-200 p-8 text-center">
-	<div class="text-4xl mb-4">📅</div>
-	<h2 class="text-lg font-medium text-primary-600">Coming Soon</h2>
-	<p class="text-sm text-gray-400 mt-2">Browse expenses, budget, and savings by month.</p>
+<script lang="ts">
+	import { get } from '$lib/api';
+
+	type MonthEntry = { month: string; year: number };
+	let months = $state<MonthEntry[]>([]);
+	let loading = $state(true);
+	let error = $state('');
+
+	$effect(() => {
+		get<{ months: MonthEntry[] }>('/months/')
+			.then(data => { months = data.months; loading = false; })
+			.catch(e => { error = e.message; loading = false; });
+	});
+
+	// Group by year
+	const byYear = $derived(() => {
+		const groups: Record<number, string[]> = {};
+		for (const m of months) {
+			if (!groups[m.year]) groups[m.year] = [];
+			groups[m.year].push(m.month);
+		}
+		return groups;
+	});
+
+	const monthOrder = ['January','February','March','April','May','June',
+		'July','August','September','October','November','December'];
+</script>
+
+<div class="max-w-4xl">
+	<h1 class="text-2xl font-bold text-primary-800 mb-6">Months</h1>
+
+	{#if error}
+		<div class="mb-4 p-3 bg-red-50 border border-red-200 rounded text-sm text-red-700">{error}</div>
+	{/if}
+
+	{#if loading}
+		<p class="text-gray-400 text-sm">Loading...</p>
+	{:else}
+		{#each Object.entries(byYear()).sort((a, b) => Number(b[0]) - Number(a[0])) as [year, monthNames]}
+			<div class="mb-6">
+				<h2 class="text-lg font-semibold text-primary-700 mb-3">{year}</h2>
+				<div class="grid grid-cols-3 md:grid-cols-4 gap-2">
+					{#each monthOrder as m}
+						{@const exists = monthNames.includes(m)}
+						{#if exists}
+							<a
+								href="/months/{year}-{m}"
+								class="p-3 rounded-lg text-center text-sm font-medium transition-shadow hover:shadow-md"
+								style="background: white; border: 1px solid #b3dbe9; color: #2f6577;"
+							>{m}</a>
+						{:else}
+							<div class="p-3 rounded-lg text-center text-sm text-gray-300 bg-gray-50">{m}</div>
+						{/if}
+					{/each}
+				</div>
+			</div>
+		{/each}
+	{/if}
 </div>
