@@ -144,6 +144,7 @@
 	async function loadMonthDetail(month: string, year: number) {
 		if (!$sessionId) return;
 		const key = `${month}-${year}`;
+		pipeSortKey = ''; pipeSortAsc = true;
 		if (editingMonth === key) { editingMonth = null; selectedMonth = null; return; }
 		try {
 			selectedMonth = await get<MonthDetail>(`/pipeline/${$sessionId}/months/${month}/${year}`);
@@ -187,6 +188,7 @@
 			changes = resp.changes;
 			selectedChanges = new Set(changes.map((_, i) => i));
 			if (changes.length > 0) {
+				pipeSortKey = ''; pipeSortAsc = true;
 				step = 4;
 			} else {
 				await handleCommit();
@@ -221,6 +223,31 @@
 		step = 1; pendingFiles = []; stagedResult = null; selectedMonth = null;
 		editingMonth = null; commitResult = null; changes = []; error = '';
 		$sessionId = null;
+	}
+
+	// Pipeline table sorting
+	let pipeSortKey = $state('');
+	let pipeSortAsc = $state(true);
+
+	function pipeSortToggle(key: string) {
+		if (pipeSortKey === key) pipeSortAsc = !pipeSortAsc;
+		else { pipeSortKey = key; pipeSortAsc = true; }
+	}
+
+	function pipeSortInd(key: string): string {
+		if (pipeSortKey !== key) return '';
+		return pipeSortAsc ? ' ▲' : ' ▼';
+	}
+
+	function pipeSorted<T>(items: T[]): T[] {
+		if (!pipeSortKey) return items;
+		return [...items].sort((a: any, b: any) => {
+			let va = a[pipeSortKey], vb = b[pipeSortKey];
+			const na = parseFloat(va), nb = parseFloat(vb);
+			if (!isNaN(na) && !isNaN(nb)) return pipeSortAsc ? na - nb : nb - na;
+			va = String(va || ''); vb = String(vb || '');
+			return pipeSortAsc ? va.localeCompare(vb) : vb.localeCompare(va);
+		});
 	}
 
 	const stepLabels = [
@@ -320,7 +347,9 @@
 							</h3>
 							<div class="flex gap-4 text-xs text-gray-500">
 								{#if m.new_expenses}<span>{m.new_expenses} expenses</span>{/if}
-								{#if m.duplicates}<span class="text-gray-400">{m.duplicates} dupes</span>{/if}
+								{#if m.duplicates}
+									<span class="{m.new_expenses === 0 ? 'text-amber-600 font-medium' : 'text-gray-400'}">{m.duplicates} dupes</span>
+								{/if}
 								{#if m.new_income}<span>{m.new_income} income</span>{/if}
 								{#if m.carryover_updates}<span>{m.carryover_updates} carryover</span>{/if}
 								{#if m.savings_allocations}<span>{m.savings_allocations} savings</span>{/if}
@@ -334,6 +363,11 @@
 					<!-- Expanded month detail with editing -->
 					{#if editingMonth === `${m.month}-${m.year}` && selectedMonth}
 						<div class="border-t p-4 space-y-4">
+							{#if m.new_expenses === 0 && m.duplicates > 0}
+								<div class="p-3 bg-amber-50 border border-amber-200 rounded-lg text-sm text-amber-700 text-center font-medium">
+									All {m.duplicates} expenses were duplicates — nothing new to write.
+								</div>
+							{/if}
 							{#if selectedMonth.expenses.length > 0}
 								<div>
 									<h4 class="text-sm font-medium text-primary-600 mb-2">Expenses ({selectedMonth.expenses.length})</h4>
@@ -341,15 +375,15 @@
 										<table class="w-full text-sm">
 											<thead style="background: #f0f7fa;">
 												<tr>
-													<th class="px-2 py-1.5 text-left text-xs font-medium text-gray-600">Date</th>
-													<th class="px-2 py-1.5 text-left text-xs font-medium text-gray-600 rtl">Business</th>
-													<th class="px-2 py-1.5 text-right text-xs font-medium text-gray-600">Amount</th>
-													<th class="px-2 py-1.5 text-left text-xs font-medium text-gray-600">Category</th>
-													<th class="px-2 py-1.5 text-left text-xs font-medium text-gray-600">Status</th>
+													<th class="sortable-th" onclick={() => pipeSortToggle('date')}>Date{pipeSortInd('date')}</th>
+													<th class="sortable-th rtl" onclick={() => pipeSortToggle('business_name')}>Business{pipeSortInd('business_name')}</th>
+													<th class="sortable-th text-right" onclick={() => pipeSortToggle('amount')}>Amount{pipeSortInd('amount')}</th>
+													<th class="sortable-th" onclick={() => pipeSortToggle('category')}>Category{pipeSortInd('category')}</th>
+													<th class="sortable-th" onclick={() => pipeSortToggle('status')}>Status{pipeSortInd('status')}</th>
 												</tr>
 											</thead>
 											<tbody>
-												{#each selectedMonth.expenses as exp}
+												{#each pipeSorted(selectedMonth.expenses) as exp}
 													<tr class="border-t {!exp.category ? 'bg-red-50' : 'hover:bg-gray-50'}">
 														<td class="px-2 py-1 whitespace-nowrap text-xs">{exp.date}</td>
 														<td class="px-2 py-1 rtl text-xs">{exp.business_name}</td>
@@ -385,19 +419,25 @@
 									<table class="w-full text-sm">
 										<thead style="background: #f0f7fa;">
 											<tr>
-												<th class="px-2 py-1.5 text-left text-xs font-medium text-gray-600">Date</th>
-												<th class="px-2 py-1.5 text-left text-xs font-medium text-gray-600 rtl">Comments</th>
-												<th class="px-2 py-1.5 text-right text-xs font-medium text-gray-600">Amount</th>
-												<th class="px-2 py-1.5 text-left text-xs font-medium text-gray-600">Category</th>
+												<th class="sortable-th" onclick={() => pipeSortToggle('date')}>Date{pipeSortInd('date')}</th>
+												<th class="sortable-th rtl" onclick={() => pipeSortToggle('comments')}>Comments{pipeSortInd('comments')}</th>
+												<th class="sortable-th text-right" onclick={() => pipeSortToggle('amount')}>Amount{pipeSortInd('amount')}</th>
+												<th class="sortable-th" onclick={() => pipeSortToggle('category')}>Category{pipeSortInd('category')}</th>
 											</tr>
 										</thead>
 										<tbody>
-											{#each selectedMonth.income as inc}
+											{#each pipeSorted(selectedMonth.income) as inc}
 												<tr class="border-t hover:bg-gray-50">
 													<td class="px-2 py-1 text-xs">{inc.date}</td>
 													<td class="px-2 py-1 rtl text-xs">{inc.comments}</td>
 													<td class="px-2 py-1 text-right text-xs">{inc.amount}</td>
-													<td class="px-2 py-1 rtl text-xs">{inc.category}</td>
+													<td class="px-2 py-1">
+														<CategoryPicker
+															{categories}
+															value={inc.category}
+															onchange={(cat) => saveIncomeEdit(m.month, m.year, inc.index, cat, inc.comments)}
+														/>
+													</td>
 												</tr>
 											{/each}
 										</tbody>
@@ -542,3 +582,19 @@
 		</div>
 	{/if}
 </div>
+
+<style>
+	.sortable-th {
+		padding: 0.375rem 0.5rem;
+		font-size: 0.75rem;
+		font-weight: 500;
+		color: #4b5563;
+		cursor: pointer;
+		user-select: none;
+		white-space: nowrap;
+	}
+	.sortable-th:hover {
+		color: #2f6577;
+		background: #e8f0f4;
+	}
+</style>

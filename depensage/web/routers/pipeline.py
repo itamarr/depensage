@@ -37,6 +37,20 @@ def _get_store(request: Request) -> SessionStore:
     return request.app.state.session_store
 
 
+@router.get("/history")
+async def get_history(request: Request):
+    """Get recent pipeline run history."""
+    history_path = os.path.join(".artifacts", "run_history.json")
+    if not os.path.exists(history_path):
+        return {"runs": []}
+    try:
+        with open(history_path) as f:
+            runs = json.load(f)
+        return {"runs": runs[-20:]}  # Last 20
+    except Exception:
+        return {"runs": []}
+
+
 @router.post("/upload", response_model=UploadResponse)
 async def upload_files(
     request: Request,
