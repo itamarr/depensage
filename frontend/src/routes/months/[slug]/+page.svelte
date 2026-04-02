@@ -261,7 +261,7 @@
 								<td class="px-2 py-1 text-xs rtl">{inc.comments}</td>
 								<td class="px-2 py-1 text-xs text-right">{inc.amount}</td>
 								<td class="px-2 py-1 text-xs rtl">{inc.category}</td>
-								<td class="px-2 py-1 text-xs whitespace-nowrap">{inc.date}</td>
+								<td class="px-2 py-1 text-xs whitespace-nowrap text-center">{inc.date}</td>
 							</tr>
 						{/each}
 					</tbody>
