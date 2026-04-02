@@ -18,7 +18,8 @@ DepenSage (from French "dépense" meaning expense + "sage" meaning wise) automat
 - **Month-to-Month Carryover**: Budget surplus, savings accumulated, and savings budget automatically carry over. Works across years (Dec 2025 → Jan 2026).
 - **Savings Allocation**: Auto-computes from carryover-set savings budget, deducts preset targets, allocates surplus to a configurable default goal
 - **Lookup-based Classification**: Exact match and prefix pattern matching for CC merchants, bank actions, and income sources
-- **Interactive Review**: Export staged XLSX → edit classifications → import with change detection → update lookup tables
+- **Web App**: Upload statements, review staged changes with inline category editing, manage lookups, browse month data — all from the browser. Mobile-friendly.
+- **Interactive Review**: Inline category picker in the web app, or export staged XLSX → edit → import with change detection → update lookup tables (CLI)
 - **Multi-year Support**: Separate spreadsheet per year with automatic cross-year handler resolution
 - **Bank Transcript Integration**: Parses Israeli bank transcripts — expenses, income, CC lump sums, and closing balances
 - **CC Verification**: Compare CC lump sums from bank against CC-tagged expenses per billing cycle
@@ -97,6 +98,16 @@ python -m depensage.sheets.cli build-lookup
 python -m depensage.sheets.cli consolidate-patterns
 ```
 
+### Config management
+
+```bash
+python -m depensage.sheets.cli config                                      # show config
+python -m depensage.sheets.cli config-add 2027 SPREADSHEET_ID --year 2027  # add spreadsheet
+python -m depensage.sheets.cli config-update 2027 --default                # set as default
+python -m depensage.sheets.cli config-remove old_key                       # remove
+python -m depensage.sheets.cli set-password                                # set web password
+```
+
 ### Inspect sheets
 
 ```bash
@@ -107,7 +118,15 @@ python -m depensage.sheets.cli -s 2025 formulas January E130:E140
 
 ## Web App
 
-The web app provides a visual interface for the full pipeline workflow.
+The web app provides a visual interface for the full pipeline workflow, plus management pages for lookups, categories, and month data browsing.
+
+**Features:**
+- Pipeline wizard: upload → process → review with inline category editing → commit
+- Lookup table management (CC, bank, income) with search, add, delete
+- Month viewer with expenses, budget, savings, and income tabs (sortable columns)
+- Categories grid view
+- Google Sheets direct links per month
+- Password auth with rate limiting, daily log files
 
 ### Build & Run
 
@@ -120,8 +139,8 @@ npm install --prefix frontend
 npm run build --prefix frontend
 cp -r frontend/build depensage/web/static
 
-# Add password to .secrets/config.json
-# "web_password": "your-password"
+# Set web password
+python -m depensage.sheets.cli set-password
 
 # Run (HTTP for local dev)
 python -m depensage.web.main --no-ssl

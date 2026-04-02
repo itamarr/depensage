@@ -45,6 +45,16 @@ python -m depensage.sheets.cli metadata
 
 Override defaults with `--spreadsheet-id`, `--credentials`, and `-s/--spreadsheet` flags.
 
+```bash
+# Config management (no manual config.json editing needed)
+python -m depensage.sheets.cli config                                    # show config
+python -m depensage.sheets.cli config-add 2027 SPREADSHEET_ID --year 2027 --default
+python -m depensage.sheets.cli config-update 2027 --id NEW_ID
+python -m depensage.sheets.cli config-remove 2027
+python -m depensage.sheets.cli config-set default_savings_goal דירה
+python -m depensage.sheets.cli set-password                              # web app password
+```
+
 ## Web App
 
 ```bash

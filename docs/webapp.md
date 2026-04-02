@@ -76,11 +76,8 @@ cp -r frontend/build depensage/web/static  # Copy to backend
 
 ### Configure
 
-Add to `.secrets/config.json`:
-```json
-{
-  "web_password": "your-strong-password-here"
-}
+```bash
+python -m depensage.sheets.cli set-password    # Interactive, stores SHA-256 hash
 ```
 
 ### Generate SSL Certificate (optional, for HTTPS)
@@ -136,13 +133,36 @@ Access the dev server at `http://localhost:5173` (Vite dev server with hot reloa
 - `POST /api/pipeline/{id}/commit` — Write to Google Sheets
 - `DELETE /api/pipeline/{id}` — Discard session
 
+### Staging & Classification
+- `GET /api/staging/{id}/categories` — Categories for classification UI
+- `GET /api/staging/{id}/unknowns` — Unclassified expenses + prefix groups
+- `PUT /api/staging/{id}/classify` — Bulk classifications
+- `PUT /api/staging/{id}/months/{month}/{year}` — Edit staged expenses/income
+- `GET /api/staging/{id}/changes` — Detect lookup diffs vs metadata
+- `PUT /api/staging/{id}/lookup-updates` — Apply confirmed changes to classifiers
+
+### Lookups
+- `GET /api/lookups/{type}` — All entries (cc/bank/income)
+- `POST /api/lookups/{type}/exact` — Add exact match
+- `PUT /api/lookups/{type}/exact/{key}` — Update exact match
+- `DELETE /api/lookups/{type}/exact/{key}` — Remove exact match
+- `POST /api/lookups/{type}/pattern` — Add prefix pattern
+- `DELETE /api/lookups/{type}/pattern/{index}` — Remove pattern
+
+### Categories
+- `GET /api/categories/` — All categories with subcategories
+
+### Month Data
+- `GET /api/months/` — List available months
+- `GET /api/months/{year}/{month}/expenses` — Expense rows (formatted dates)
+- `GET /api/months/{year}/{month}/budget` — Budget + savings lines
+- `GET /api/months/{year}/{month}/income` — Income + reconciliation
+- `GET /api/months/{year}/{month}/link` — Google Sheets direct URL
+- `PUT /api/months/{year}/{month}/cells` — Batch cell editing
+
 ### Planned (not yet implemented)
-- `/api/staging/*` — Classification & editing (Phase 2)
-- `/api/lookups/*` — Lookup table CRUD (Phase 3)
-- `/api/categories` — Category management (Phase 3)
-- `/api/months/*` — Month data viewing/editing (Phase 3)
-- `/api/history` — Run history (Phase 4)
-- `/api/stats` — Statistics (Phase 5)
+- `/api/history` — Run history (Phase 8.4)
+- `/api/stats` — Statistics (Phase 8.5)
 
 ## Security
 
