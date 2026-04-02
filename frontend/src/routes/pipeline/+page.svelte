@@ -91,6 +91,18 @@
 				if (defaultKey) spreadsheetKey = defaultKey;
 			})
 			.catch(() => {});
+
+		// Restore from existing server session if available
+		if ($sessionId && step === 1) {
+			get<StagedResult>(`/pipeline/${$sessionId}/result`)
+				.then(async (result) => {
+					stagedResult = result;
+					const catResp = await get<{ categories: Record<string, string[]> }>(`/staging/${$sessionId}/categories`);
+					categories = catResp.categories;
+					step = 3;
+				})
+				.catch(() => { $sessionId = null; }); // Session expired, start fresh
+		}
 	});
 
 	function handleFilesAdded(files: FileList) {
@@ -176,6 +188,33 @@
 			if (selectedMonth) {
 				const inc = selectedMonth.income.find(e => e.index === index);
 				if (inc) { inc.category = category; inc.comments = comments; }
+				selectedMonth = { ...selectedMonth };
+			}
+		} catch (e: any) { error = e.message; }
+	}
+
+	async function saveSavingsEdit(month: string, year: number, goalName: string, allocated: number) {
+		if (!$sessionId) return;
+		try {
+			await put(`/staging/${$sessionId}/months/${month}/${year}`, {
+				expenses: [], income: [], savings: [{ goal_name: goalName, allocated }],
+			});
+			if (selectedMonth) {
+				const alloc = selectedMonth.savings_allocations.find(a => a.goal_name === goalName);
+				if (alloc) alloc.allocated = allocated;
+				selectedMonth = { ...selectedMonth };
+			}
+		} catch (e: any) { error = e.message; }
+	}
+
+	async function saveBankBalance(month: string, year: number, balance: number) {
+		if (!$sessionId) return;
+		try {
+			await put(`/staging/${$sessionId}/months/${month}/${year}`, {
+				expenses: [], income: [], bank_balance: balance,
+			});
+			if (selectedMonth) {
+				selectedMonth.bank_balance = balance;
 				selectedMonth = { ...selectedMonth };
 			}
 		} catch (e: any) { error = e.message; }
@@ -463,7 +502,15 @@
 												<tr class="border-t">
 													<td class="px-2 py-1 rtl text-xs">{alloc.goal_name}</td>
 													<td class="px-2 py-1 text-right text-xs">{alloc.preset_incoming.toLocaleString()}</td>
-													<td class="px-2 py-1 text-right text-xs font-medium">{alloc.allocated.toLocaleString()}</td>
+													<td class="px-2 py-1 text-right">
+														<input
+															type="number"
+															value={alloc.allocated}
+															class="text-xs border rounded px-1.5 py-0.5 w-20 text-right"
+															style="border-color: #d1d5db;"
+															onchange={(e) => saveSavingsEdit(m.month, m.year, alloc.goal_name, parseFloat((e.target as HTMLInputElement).value) || 0)}
+														/>
+													</td>
 												</tr>
 											{/each}
 										</tbody>
@@ -472,9 +519,16 @@
 							{/if}
 
 							{#if selectedMonth.bank_balance != null}
-								<div class="text-sm">
+								<div class="text-sm flex items-center gap-2">
 									<span class="text-gray-600">Bank balance:</span>
-									<span class="font-medium">{selectedMonth.bank_balance.toLocaleString()} ₪</span>
+									<input
+										type="number"
+										value={selectedMonth.bank_balance}
+										class="text-sm border rounded px-2 py-0.5 w-32 text-right font-medium"
+										style="border-color: #d1d5db;"
+										onchange={(e) => saveBankBalance(m.month, m.year, parseFloat((e.target as HTMLInputElement).value) || 0)}
+									/>
+									<span class="text-gray-400">₪</span>
 								</div>
 							{/if}
 						</div>

@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { get, post, del } from '$lib/api';
+	import { get, post, put, del } from '$lib/api';
 
 	type Entry = { key: string; category: string; subcategory: string };
 	type PatternEntry = { prefix: string; category: string; subcategory: string };
@@ -10,6 +10,11 @@
 	let loading = $state(false);
 	let error = $state('');
 	let search = $state('');
+
+	// Inline editing
+	let editingKey = $state<string | null>(null);
+	let editCat = $state('');
+	let editSub = $state('');
 
 	// Add form
 	let showAdd = $state(false);
@@ -50,6 +55,23 @@
 				});
 			}
 			showAdd = false; addKey = ''; addCategory = ''; addSubcategory = '';
+			await loadTab(activeTab);
+		} catch (e: any) { error = e.message; }
+	}
+
+	function startEdit(entry: Entry) {
+		editingKey = entry.key;
+		editCat = entry.category;
+		editSub = entry.subcategory;
+	}
+
+	async function saveEdit(key: string) {
+		error = '';
+		try {
+			await put(`/lookups/${activeTab}/exact/${encodeURIComponent(key)}`, {
+				key, category: editCat, subcategory: editSub,
+			});
+			editingKey = null;
 			await loadTab(activeTab);
 		} catch (e: any) { error = e.message; }
 	}
@@ -155,15 +177,27 @@
 					</thead>
 					<tbody>
 						{#each filteredExact as entry}
-							<tr class="border-t hover:bg-gray-50">
-								<td class="px-2 py-1 text-xs">{entry.key}</td>
-								<td class="px-2 py-1 text-xs">{entry.category}</td>
-								<td class="px-2 py-1 text-xs">{entry.subcategory}</td>
-								<td class="px-2 py-1" dir="ltr">
-									<button onclick={() => handleDelete(entry.key)}
-										class="text-red-400 hover:text-red-600 text-xs">delete</button>
-								</td>
-							</tr>
+							{#if editingKey === entry.key}
+								<tr class="border-t" style="background: #f0f7fa;">
+									<td class="px-2 py-1 text-xs">{entry.key}</td>
+									<td class="px-2 py-1"><input bind:value={editCat} class="text-xs border rounded px-1 py-0.5 w-full" style="direction:rtl;" /></td>
+									<td class="px-2 py-1"><input bind:value={editSub} class="text-xs border rounded px-1 py-0.5 w-full" style="direction:rtl;" /></td>
+									<td class="px-2 py-1" dir="ltr">
+										<button onclick={() => saveEdit(entry.key)} class="text-green-600 hover:text-green-800 text-xs mr-1">save</button>
+										<button onclick={() => editingKey = null} class="text-gray-400 hover:text-gray-600 text-xs">cancel</button>
+									</td>
+								</tr>
+							{:else}
+								<tr class="border-t hover:bg-gray-50">
+									<td class="px-2 py-1 text-xs">{entry.key}</td>
+									<td class="px-2 py-1 text-xs">{entry.category}</td>
+									<td class="px-2 py-1 text-xs">{entry.subcategory}</td>
+									<td class="px-2 py-1" dir="ltr">
+										<button onclick={() => startEdit(entry)} class="text-primary-600 hover:text-primary-800 text-xs mr-1">edit</button>
+										<button onclick={() => handleDelete(entry.key)} class="text-red-400 hover:text-red-600 text-xs">delete</button>
+									</td>
+								</tr>
+							{/if}
 						{/each}
 					</tbody>
 				</table>

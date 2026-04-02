@@ -137,6 +137,17 @@ async def edit_month(
                 row[0] = edit.comments
             updated += 1
 
+    for edit in edits.savings:
+        for alloc in stage.savings_allocations:
+            if alloc.goal_name == edit.goal_name:
+                alloc.allocated = edit.allocated
+                updated += 1
+                break
+
+    if edits.bank_balance is not None:
+        stage.bank_balance = edits.bank_balance
+        updated += 1
+
     return {"updated": updated}
 
 

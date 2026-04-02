@@ -108,9 +108,16 @@ class IncomeEdit(BaseModel):
     comments: str = ""
 
 
+class SavingsEdit(BaseModel):
+    goal_name: str
+    allocated: float
+
+
 class BulkEditRequest(BaseModel):
     expenses: list[ExpenseEdit] = []
     income: list[IncomeEdit] = []
+    savings: list[SavingsEdit] = []
+    bank_balance: float | None = None
 
 
 class CategoryInfo(BaseModel):
