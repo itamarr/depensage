@@ -132,6 +132,7 @@ class RowChangeItem(BaseModel):
     old_category: str
     new_category: str
     old_subcategory: str
+    date: str = ""
     new_subcategory: str
 
 

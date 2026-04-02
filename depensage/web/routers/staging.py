@@ -179,6 +179,7 @@ async def get_changes(session_id: str, request: Request):
                     new_category=new_cat,
                     old_subcategory=meta.orig_subcategory,
                     new_subcategory=new_sub,
+                    date=str(row[5]) if len(row) > 5 and row[5] else "",
                 ))
 
         # Check income
@@ -199,6 +200,7 @@ async def get_changes(session_id: str, request: Request):
                     new_category=new_cat,
                     old_subcategory=meta.orig_subcategory,
                     new_subcategory=new_sub,
+                    date=str(row[3]) if len(row) > 3 and row[3] else "",
                 ))
 
     return {"changes": changes}

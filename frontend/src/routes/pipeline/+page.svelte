@@ -45,6 +45,7 @@
 		month: string; row_type: string; source: string; lookup_key: string;
 		old_category: string; new_category: string;
 		old_subcategory: string; new_subcategory: string;
+		date: string;
 	};
 
 	// Wizard steps: 1=upload, 2=running, 3=review/edit, 4=changes, 5=done
@@ -557,6 +558,7 @@
 							</th>
 							<th class="px-2 py-1.5 text-left text-xs font-medium text-gray-600">Source</th>
 							<th class="px-2 py-1.5 text-left text-xs font-medium text-gray-600 rtl">Name</th>
+							<th class="px-2 py-1.5 text-left text-xs font-medium text-gray-600">Date</th>
 							<th class="px-2 py-1.5 text-left text-xs font-medium text-gray-600 rtl">Old</th>
 							<th class="px-2 py-1.5 text-left text-xs font-medium text-gray-600 rtl">New</th>
 						</tr>
@@ -578,6 +580,7 @@
 									</span>
 								</td>
 								<td class="px-2 py-1 text-xs rtl">{c.lookup_key}</td>
+								<td class="px-2 py-1 text-xs whitespace-nowrap">{c.date}</td>
 								<td class="px-2 py-1 text-xs rtl text-gray-400">
 									{c.old_category || '(empty)'}{c.old_subcategory ? ` / ${c.old_subcategory}` : ''}
 								</td>
