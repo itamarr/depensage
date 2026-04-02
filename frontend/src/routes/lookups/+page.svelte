@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { get, post, put, del } from '$lib/api';
+	import CategoryPicker from '$lib/components/CategoryPicker.svelte';
 
 	type Entry = { key: string; category: string; subcategory: string };
 	type PatternEntry = { prefix: string; category: string; subcategory: string };
@@ -10,6 +11,7 @@
 	let loading = $state(false);
 	let error = $state('');
 	let search = $state('');
+	let categories = $state<Record<string, string[]>>({});
 
 	// Inline editing
 	let editingKey = $state<string | null>(null);
@@ -34,7 +36,14 @@
 		loading = false;
 	}
 
-	$effect(() => { loadTab('cc'); });
+	$effect(() => {
+		loadTab('cc');
+		get<{ categories: Record<string, string[]> }>('/categories/')
+			.then(data => categories = data.categories)
+			.catch(() => {});
+	});
+
+	const useDropdowns = $derived(activeTab !== 'income');
 
 	const filteredExact = $derived(
 		search ? exact.filter(e =>
@@ -144,14 +153,28 @@
 							{addType === 'exact' ? 'Name' : 'Prefix'}
 							<input bind:value={addKey} class="block border rounded px-2 py-1 text-sm mt-0.5 rtl" />
 						</label>
-						<label class="text-xs text-gray-600">
-							Category
-							<input bind:value={addCategory} class="block border rounded px-2 py-1 text-sm mt-0.5 rtl" />
-						</label>
-						<label class="text-xs text-gray-600">
-							{activeTab === 'income' ? 'Comments' : 'Subcategory'}
-							<input bind:value={addSubcategory} class="block border rounded px-2 py-1 text-sm mt-0.5 rtl" />
-						</label>
+						{#if useDropdowns && Object.keys(categories).length > 0}
+							<label class="text-xs text-gray-600">
+								Category / Subcategory
+								<div class="mt-0.5">
+									<CategoryPicker
+										{categories}
+										value={addCategory}
+										subValue={addSubcategory}
+										onchange={(cat, sub) => { addCategory = cat; addSubcategory = sub; }}
+									/>
+								</div>
+							</label>
+						{:else}
+							<label class="text-xs text-gray-600">
+								Category
+								<input bind:value={addCategory} class="block border rounded px-2 py-1 text-sm mt-0.5 rtl" />
+							</label>
+							<label class="text-xs text-gray-600">
+								{activeTab === 'income' ? 'Comments' : 'Subcategory'}
+								<input bind:value={addSubcategory} class="block border rounded px-2 py-1 text-sm mt-0.5 rtl" />
+							</label>
+						{/if}
 						<button
 							onclick={handleAdd}
 							disabled={!addKey || !addCategory}
@@ -180,8 +203,19 @@
 							{#if editingKey === entry.key}
 								<tr class="border-t" style="background: #f0f7fa;">
 									<td class="px-2 py-1 text-xs">{entry.key}</td>
-									<td class="px-2 py-1"><input bind:value={editCat} class="text-xs border rounded px-1 py-0.5 w-full" style="direction:rtl;" /></td>
-									<td class="px-2 py-1"><input bind:value={editSub} class="text-xs border rounded px-1 py-0.5 w-full" style="direction:rtl;" /></td>
+									{#if useDropdowns && Object.keys(categories).length > 0}
+										<td class="px-2 py-1" colspan="2">
+											<CategoryPicker
+												{categories}
+												value={editCat}
+												subValue={editSub}
+												onchange={(cat, sub) => { editCat = cat; editSub = sub; }}
+											/>
+										</td>
+									{:else}
+										<td class="px-2 py-1"><input bind:value={editCat} class="text-xs border rounded px-1 py-0.5 w-full" style="direction:rtl;" /></td>
+										<td class="px-2 py-1"><input bind:value={editSub} class="text-xs border rounded px-1 py-0.5 w-full" style="direction:rtl;" /></td>
+									{/if}
 									<td class="px-2 py-1" dir="ltr">
 										<button onclick={() => saveEdit(entry.key)} class="text-green-600 hover:text-green-800 text-xs mr-1">save</button>
 										<button onclick={() => editingKey = null} class="text-gray-400 hover:text-gray-600 text-xs">cancel</button>
