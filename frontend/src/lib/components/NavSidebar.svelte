@@ -8,6 +8,7 @@
 		{ href: '/lookups', label: 'Lookups', icon: '🔍' },
 		{ href: '/categories', label: 'Categories', icon: '📂' },
 		{ href: '/stats', label: 'Statistics', icon: '📈' },
+		{ href: '/settings', label: 'Settings', icon: '⚙' },
 	];
 
 	let collapsed = $state(false);

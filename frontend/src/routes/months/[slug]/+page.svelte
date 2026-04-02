@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { page } from '$app/state';
-	import { get } from '$lib/api';
+	import { get, put } from '$lib/api';
 
 	// Parse slug: "2026-January"
 	const slug = $derived(page.params.slug);
@@ -90,6 +90,17 @@
 	});
 
 	function fmtNum(n: number) { return n.toLocaleString(undefined, { maximumFractionDigits: 2 }); }
+
+	async function saveFlagEdit(bl: BudgetLine, newFlag: string) {
+		try {
+			await put(`/months/${year}/${month}/cells`, {
+				edits: [{ cell_ref: `H${bl.row_number}`, value: newFlag }],
+			});
+			bl.carry_status = newFlag;
+			bl.carry_flag = newFlag === 'CARRY';
+			budgetLines = [...budgetLines];
+		} catch (e: any) { error = e.message; }
+	}
 </script>
 
 <div class="max-w-5xl">
@@ -225,11 +236,16 @@
 										<td class="px-2 py-1 text-xs rtl font-medium">{bl.category}</td>
 										{#if showFlag}
 											<td class="px-2 py-1 text-center">
-												{#if bl.carry_status === 'CARRY'}
-													<span class="text-xs px-1 rounded" style="background: #fdf8ed; color: #b87420;">CARRY</span>
-												{:else if bl.carry_status === 'IGNORE'}
-													<span class="text-xs px-1 rounded" style="background: #f0f0f0; color: #6b7280;">IGNORE</span>
-												{/if}
+												<select
+													value={bl.carry_status}
+													class="text-xs border rounded px-1 py-0.5"
+													style="border-color: #d1d5db;"
+													onchange={(e) => saveFlagEdit(bl, (e.target as HTMLSelectElement).value)}
+												>
+													<option value="">—</option>
+													<option value="CARRY">CARRY</option>
+													<option value="IGNORE">IGNORE</option>
+												</select>
 											</td>
 										{/if}
 									</tr>
