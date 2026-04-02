@@ -24,7 +24,7 @@ def _write_bank_excel(rows, headers=None):
         headers = ["תאריך", "הפעולה", "פרטים", "אסמכתא", "חובה", "זכות",
                    "יתרה בש''ח", "תאריך ערך", "לטובת", "עבור"]
 
-    f = tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx")
+    f = tempfile.NamedTemporaryFile(delete=False, dir=tempfile.gettempdir(), suffix=".xlsx")
     f.close()
 
     ncols = len(headers)
@@ -153,7 +153,7 @@ class TestBankParser(unittest.TestCase):
     def test_detect_rejects_cc_transcript(self):
         """detect_bank_transcript rejects CC statement files."""
         # CC format: title row + header at row 1
-        f = tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx")
+        f = tempfile.NamedTemporaryFile(delete=False, dir=tempfile.gettempdir(), suffix=".xlsx")
         f.close()
         self.temp_files.append(f.name)
         df = pd.DataFrame([["01/01/2026", "Shop", 100.00]],
@@ -171,7 +171,7 @@ class TestBankParser(unittest.TestCase):
 
     def test_rejects_csv(self):
         """CSV file returns None."""
-        f = tempfile.NamedTemporaryFile(delete=False, suffix=".csv")
+        f = tempfile.NamedTemporaryFile(delete=False, dir=tempfile.gettempdir(), suffix=".csv")
         f.write(b"a,b,c\n1,2,3\n")
         f.close()
         self.temp_files.append(f.name)

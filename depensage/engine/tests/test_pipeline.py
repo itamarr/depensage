@@ -16,7 +16,7 @@ from depensage.classifier.cc_lookup import ClassificationResult
 def _write_excel(rows, headers, title_row="Account holder info"):
     """Write an Excel file matching Israeli CC format (title row + header + data)."""
     df = pd.DataFrame(rows, columns=headers)
-    f = tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx")
+    f = tempfile.NamedTemporaryFile(delete=False, dir=tempfile.gettempdir(), suffix=".xlsx")
     f.close()
     with pd.ExcelWriter(f.name, engine="openpyxl") as writer:
         title_df = pd.DataFrame([[title_row]])
@@ -38,7 +38,7 @@ def _write_bank_excel(data_rows):
         headers,
     ]
     all_rows.extend(data_rows)
-    f = tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx")
+    f = tempfile.NamedTemporaryFile(delete=False, dir=tempfile.gettempdir(), suffix=".xlsx")
     f.close()
     with pd.ExcelWriter(f.name, engine="openpyxl") as writer:
         df = pd.DataFrame(all_rows)

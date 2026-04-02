@@ -14,7 +14,7 @@ def _write_excel(rows, headers, title_row="Account holder info"):
     """Write an Excel file matching Israeli CC format (title row + header + data)."""
     df = pd.DataFrame(rows, columns=headers)
     # Prepend a title row by writing with startrow=1 and manually inserting title
-    f = tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx")
+    f = tempfile.NamedTemporaryFile(delete=False, dir=tempfile.gettempdir(), suffix=".xlsx")
     f.close()
     with pd.ExcelWriter(f.name, engine="openpyxl") as writer:
         # Write title row at row 0
@@ -82,7 +82,7 @@ class TestStatementParser(unittest.TestCase):
         self.assertTrue(pd.isna(result.iloc[1]["charge_date"]))
 
     def test_rejects_csv(self):
-        f = tempfile.NamedTemporaryFile(delete=False, suffix=".csv")
+        f = tempfile.NamedTemporaryFile(delete=False, dir=tempfile.gettempdir(), suffix=".csv")
         f.write(b"a,b,c\n1,2,3\n")
         f.close()
         self.temp_files.append(f.name)
