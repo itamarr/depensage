@@ -432,10 +432,12 @@
 													<td class="px-2 py-1 rtl text-xs">{inc.comments}</td>
 													<td class="px-2 py-1 text-right text-xs">{inc.amount}</td>
 													<td class="px-2 py-1">
-														<CategoryPicker
-															{categories}
+														<input
+															type="text"
 															value={inc.category}
-															onchange={(cat) => saveIncomeEdit(m.month, m.year, inc.index, cat, inc.comments)}
+															class="text-xs border rounded px-1.5 py-0.5 w-24 rtl"
+															style="border-color: #d1d5db;"
+															onchange={(e) => saveIncomeEdit(m.month, m.year, inc.index, (e.target as HTMLInputElement).value, inc.comments)}
 														/>
 													</td>
 												</tr>
