@@ -51,6 +51,15 @@ async def get_history(request: Request):
         return {"runs": []}
 
 
+@router.delete("/history")
+async def clear_history(request: Request):
+    """Clear all run history."""
+    history_path = os.path.join(".artifacts", "run_history.json")
+    if os.path.exists(history_path):
+        os.remove(history_path)
+    return {"status": "cleared"}
+
+
 @router.post("/upload", response_model=UploadResponse)
 async def upload_files(
     request: Request,

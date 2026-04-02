@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { get } from '$lib/api';
+	import { get, del } from '$lib/api';
 
 	type RunMonth = { month: string; year: number; written: number; income_written: number };
 	type RunEntry = {
@@ -59,7 +59,19 @@
 	</div>
 
 	<div class="rounded-xl shadow-sm p-6" style="background: white; border: 1px solid #b3dbe9;">
-		<h2 class="text-lg font-semibold text-primary-700 mb-4">Recent Runs</h2>
+		<div class="flex items-center justify-between mb-4">
+			<h2 class="text-lg font-semibold text-primary-700">Recent Runs</h2>
+			{#if runs.length > 0}
+				<button
+					onclick={async () => {
+						if (!confirm('Clear all run history?')) return;
+						await del('/pipeline/history');
+						runs = [];
+					}}
+					class="text-xs text-red-400 hover:text-red-600"
+				>Clear history</button>
+			{/if}
+		</div>
 		{#if loadingRuns}
 			<p class="text-sm text-gray-400">Loading...</p>
 		{:else if runs.length === 0}
