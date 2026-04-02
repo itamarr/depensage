@@ -9,7 +9,7 @@
 
 	type Expense = { index: number; business_name: string; notes: string; subcategory: string; amount: string; category: string; date: string; status: string };
 	type Income = { index: number; comments: string; amount: string; category: string; date: string };
-	type BudgetLine = { category: string; subcategory: string; budget_amount: number; accumulated: number; remaining: number; carry_flag: boolean };
+	type BudgetLine = { category: string; subcategory: string; budget_amount: number; accumulated: number; remaining: number; carry_flag: boolean; carry_status: string; row_number: number };
 	type SavingsLine = { goal_name: string; target: number; accumulated: number; incoming: number; outgoing: number; total: number };
 
 	let activeTab = $state<'expenses' | 'budget' | 'income'>('expenses');
@@ -92,23 +92,20 @@
 			<div class="overflow-x-auto">
 				<table class="w-full text-sm">
 					<thead style="background: #f0f7fa;">
+						<!-- Column order matches spreadsheet B→H -->
 						<tr>
+							<th class="px-2 py-1.5 text-right text-xs font-medium text-gray-600">Status</th>
 							<th class="px-2 py-1.5 text-left text-xs font-medium text-gray-600">Date</th>
-							<th class="px-2 py-1.5 text-left text-xs font-medium text-gray-600 rtl">Business</th>
-							<th class="px-2 py-1.5 text-right text-xs font-medium text-gray-600">Amount</th>
 							<th class="px-2 py-1.5 text-left text-xs font-medium text-gray-600 rtl">Category</th>
+							<th class="px-2 py-1.5 text-right text-xs font-medium text-gray-600">Amount</th>
 							<th class="px-2 py-1.5 text-left text-xs font-medium text-gray-600 rtl">Subcat</th>
-							<th class="px-2 py-1.5 text-left text-xs font-medium text-gray-600">Status</th>
+							<th class="px-2 py-1.5 text-left text-xs font-medium text-gray-600 rtl">Notes</th>
+							<th class="px-2 py-1.5 text-left text-xs font-medium text-gray-600 rtl">Business</th>
 						</tr>
 					</thead>
 					<tbody>
 						{#each expenses as exp}
 							<tr class="border-t hover:bg-gray-50">
-								<td class="px-2 py-1 text-xs whitespace-nowrap">{exp.date}</td>
-								<td class="px-2 py-1 text-xs rtl">{exp.business_name}</td>
-								<td class="px-2 py-1 text-xs text-right">{exp.amount}</td>
-								<td class="px-2 py-1 text-xs rtl">{exp.category}</td>
-								<td class="px-2 py-1 text-xs rtl">{exp.subcategory}</td>
 								<td class="px-2 py-1">
 									{#if exp.status === 'CC'}
 										<span class="text-xs px-1 rounded" style="background: #d9edf4; color: #2f6577;">CC</span>
@@ -118,6 +115,12 @@
 										<span class="text-xs text-gray-400">pending</span>
 									{/if}
 								</td>
+								<td class="px-2 py-1 text-xs whitespace-nowrap">{exp.date}</td>
+								<td class="px-2 py-1 text-xs rtl">{exp.category}</td>
+								<td class="px-2 py-1 text-xs text-right">{exp.amount}</td>
+								<td class="px-2 py-1 text-xs rtl">{exp.subcategory}</td>
+								<td class="px-2 py-1 text-xs rtl">{exp.notes}</td>
+								<td class="px-2 py-1 text-xs rtl">{exp.business_name}</td>
 							</tr>
 						{/each}
 					</tbody>
@@ -138,31 +141,34 @@
 						</p>
 					{/if}
 					<div class="overflow-x-auto">
+						<!-- Column order matches spreadsheet B→H -->
 						<table class="w-full text-sm">
 							<thead style="background: #f0f7fa;">
 								<tr>
-									<th class="px-2 py-1.5 text-left text-xs font-medium text-gray-600 rtl">Category</th>
-									<th class="px-2 py-1.5 text-left text-xs font-medium text-gray-600 rtl">Subcat</th>
+									<th class="px-2 py-1.5 text-right text-xs font-medium text-gray-600">Remaining</th>
 									<th class="px-2 py-1.5 text-right text-xs font-medium text-gray-600">Budget</th>
 									<th class="px-2 py-1.5 text-right text-xs font-medium text-gray-600">Accumulated</th>
-									<th class="px-2 py-1.5 text-right text-xs font-medium text-gray-600">Remaining</th>
-									<th class="px-2 py-1.5 text-center text-xs font-medium text-gray-600">Carry</th>
+									<th class="px-2 py-1.5 text-left text-xs font-medium text-gray-600 rtl">Subcat</th>
+									<th class="px-2 py-1.5 text-left text-xs font-medium text-gray-600 rtl">Category</th>
+									<th class="px-2 py-1.5 text-center text-xs font-medium text-gray-600">Flag</th>
 								</tr>
 							</thead>
 							<tbody>
 								{#each budgetLines as bl}
 									<tr class="border-t hover:bg-gray-50">
-										<td class="px-2 py-1 text-xs rtl">{bl.category}</td>
-										<td class="px-2 py-1 text-xs rtl">{bl.subcategory}</td>
-										<td class="px-2 py-1 text-xs text-right">{fmtNum(bl.budget_amount)}</td>
-										<td class="px-2 py-1 text-xs text-right">{bl.accumulated ? fmtNum(bl.accumulated) : ''}</td>
 										<td class="px-2 py-1 text-xs text-right font-medium
 											{bl.remaining < 0 ? 'text-red-500' : bl.remaining > bl.budget_amount ? 'text-green-600' : ''}">
 											{fmtNum(bl.remaining)}
 										</td>
+										<td class="px-2 py-1 text-xs text-right">{fmtNum(bl.budget_amount)}</td>
+										<td class="px-2 py-1 text-xs text-right">{bl.accumulated ? fmtNum(bl.accumulated) : ''}</td>
+										<td class="px-2 py-1 text-xs rtl">{bl.subcategory}</td>
+										<td class="px-2 py-1 text-xs rtl font-medium">{bl.category}</td>
 										<td class="px-2 py-1 text-center">
-											{#if bl.carry_flag}
+											{#if bl.carry_status === 'CARRY'}
 												<span class="text-xs px-1 rounded" style="background: #fdf8ed; color: #b87420;">CARRY</span>
+											{:else if bl.carry_status === 'IGNORE'}
+												<span class="text-xs px-1 rounded" style="background: #f0f0f0; color: #6b7280;">IGNORE</span>
 											{/if}
 										</td>
 									</tr>
@@ -176,26 +182,27 @@
 				<div>
 					<h3 class="text-sm font-medium text-primary-600 mb-2">Savings Goals</h3>
 					<div class="overflow-x-auto">
+						<!-- Column order matches spreadsheet A→G -->
 						<table class="w-full text-sm">
 							<thead style="background: #f0f7fa;">
 								<tr>
-									<th class="px-2 py-1.5 text-left text-xs font-medium text-gray-600 rtl">Goal</th>
 									<th class="px-2 py-1.5 text-right text-xs font-medium text-gray-600">Target</th>
-									<th class="px-2 py-1.5 text-right text-xs font-medium text-gray-600">Accumulated</th>
-									<th class="px-2 py-1.5 text-right text-xs font-medium text-gray-600">Incoming</th>
-									<th class="px-2 py-1.5 text-right text-xs font-medium text-gray-600">Outgoing</th>
 									<th class="px-2 py-1.5 text-right text-xs font-medium text-gray-600">Total</th>
+									<th class="px-2 py-1.5 text-right text-xs font-medium text-gray-600">Outgoing</th>
+									<th class="px-2 py-1.5 text-right text-xs font-medium text-gray-600">Incoming</th>
+									<th class="px-2 py-1.5 text-right text-xs font-medium text-gray-600">Accumulated</th>
+									<th class="px-2 py-1.5 text-left text-xs font-medium text-gray-600 rtl">Goal</th>
 								</tr>
 							</thead>
 							<tbody>
 								{#each savingsLines as sl}
 									<tr class="border-t hover:bg-gray-50">
-										<td class="px-2 py-1 text-xs rtl font-medium">{sl.goal_name}</td>
 										<td class="px-2 py-1 text-xs text-right">{sl.target ? fmtNum(sl.target) : ''}</td>
-										<td class="px-2 py-1 text-xs text-right">{sl.accumulated ? fmtNum(sl.accumulated) : ''}</td>
-										<td class="px-2 py-1 text-xs text-right">{sl.incoming ? fmtNum(sl.incoming) : ''}</td>
-										<td class="px-2 py-1 text-xs text-right">{sl.outgoing ? fmtNum(sl.outgoing) : ''}</td>
 										<td class="px-2 py-1 text-xs text-right font-medium">{fmtNum(sl.total)}</td>
+										<td class="px-2 py-1 text-xs text-right">{sl.outgoing ? fmtNum(sl.outgoing) : ''}</td>
+										<td class="px-2 py-1 text-xs text-right">{sl.incoming ? fmtNum(sl.incoming) : ''}</td>
+										<td class="px-2 py-1 text-xs text-right">{sl.accumulated ? fmtNum(sl.accumulated) : ''}</td>
+										<td class="px-2 py-1 text-xs rtl font-medium">{sl.goal_name}</td>
 									</tr>
 								{/each}
 							</tbody>

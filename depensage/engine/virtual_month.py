@@ -32,6 +32,7 @@ class BudgetLine:
     carry_flag: bool        # H == "CARRY"
     row_number: int         # 1-based sheet row
     remaining: float = 0.0  # B (read from sheet or computed)
+    carry_status: str = ""  # Raw H column value: "CARRY", "IGNORE", or ""
 
 
 @dataclass
@@ -105,7 +106,8 @@ def _read_budget_lines(handler, sheet_name):
             continue
 
         subcategory = str(row[4]).strip() if row[4] else ""
-        carry_flag = (row[6] == "CARRY") if len(row) > 6 else False
+        carry_raw = str(row[6]).strip() if len(row) > 6 and row[6] else ""
+        carry_flag = (carry_raw == "CARRY")
         budget_amount = _float(row[2])   # D
         accumulated = _float(row[3])     # E
         remaining = _float(row[0])       # B
@@ -123,6 +125,7 @@ def _read_budget_lines(handler, sheet_name):
             carry_flag=carry_flag,
             row_number=actual_row,
             remaining=remaining,
+            carry_status=carry_raw,
         ))
 
     return lines, savings_budget_value, savings_budget_row

@@ -3,9 +3,23 @@ Month data viewing and editing endpoints.
 """
 
 import os
+from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
+
+
+def _fmt_date(val) -> str:
+    """Convert a date serial number or string to DD/MM format."""
+    if val is None or val == "":
+        return ""
+    try:
+        serial = float(val)
+        # Excel/Sheets serial: days since 1899-12-30
+        dt = datetime(1899, 12, 30) + timedelta(days=serial)
+        return dt.strftime("%d/%m")
+    except (ValueError, TypeError):
+        return str(val)
 
 from depensage.config.settings import (
     load_settings, get_spreadsheet_entry, get_entries_for_year, get_all_years,
@@ -86,7 +100,7 @@ async def get_expenses(year: int, month: str):
             "subcategory": str(row[2]).strip() if len(row) > 2 and row[2] else "",
             "amount": str(row[3]) if len(row) > 3 and row[3] else "",
             "category": str(row[4]).strip() if len(row) > 4 and row[4] else "",
-            "date": str(row[5]) if len(row) > 5 else "",
+            "date": _fmt_date(row[5] if len(row) > 5 else ""),
             "status": str(row[6]).strip() if len(row) > 6 and row[6] else "",
         })
     return {"month": month, "year": year, "expenses": expenses}
@@ -109,6 +123,7 @@ async def get_budget(year: int, month: str):
             "accumulated": bl.accumulated,
             "remaining": bl.remaining,
             "carry_flag": bl.carry_flag,
+            "carry_status": bl.carry_status,
             "row_number": bl.row_number,
         }
         for bl in vm.budget_lines
@@ -156,7 +171,7 @@ async def get_income(year: int, month: str):
             "comments": str(row[0]).strip() if row[0] else "",
             "amount": str(row[1]) if len(row) > 1 else "",
             "category": str(row[2]).strip() if len(row) > 2 and row[2] else "",
-            "date": str(row[3]) if len(row) > 3 else "",
+            "date": _fmt_date(row[3] if len(row) > 3 else ""),
         })
 
     # Reconciliation: read key cells

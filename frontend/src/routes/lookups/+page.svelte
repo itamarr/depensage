@@ -142,24 +142,24 @@
 			<!-- Exact matches -->
 			<h3 class="text-sm font-medium text-gray-600 mb-2">Exact Matches ({filteredExact.length})</h3>
 			<div class="overflow-x-auto mb-6">
-				<table class="w-full text-sm">
+				<table class="w-full text-sm" dir="rtl">
 					<thead style="background: #f0f7fa;">
 						<tr>
-							<th class="px-2 py-1.5 text-left text-xs font-medium text-gray-600 rtl">Name</th>
-							<th class="px-2 py-1.5 text-left text-xs font-medium text-gray-600 rtl">Category</th>
-							<th class="px-2 py-1.5 text-left text-xs font-medium text-gray-600 rtl">
+							<th class="px-2 py-1.5 text-right text-xs font-medium text-gray-600">Name</th>
+							<th class="px-2 py-1.5 text-right text-xs font-medium text-gray-600">Category</th>
+							<th class="px-2 py-1.5 text-right text-xs font-medium text-gray-600">
 								{activeTab === 'income' ? 'Comments' : 'Subcategory'}
 							</th>
-							<th class="px-2 py-1.5 w-16"></th>
+							<th class="px-2 py-1.5 w-16" dir="ltr"></th>
 						</tr>
 					</thead>
 					<tbody>
 						{#each filteredExact as entry}
 							<tr class="border-t hover:bg-gray-50">
-								<td class="px-2 py-1 rtl text-xs">{entry.key}</td>
-								<td class="px-2 py-1 rtl text-xs">{entry.category}</td>
-								<td class="px-2 py-1 rtl text-xs">{entry.subcategory}</td>
-								<td class="px-2 py-1">
+								<td class="px-2 py-1 text-xs">{entry.key}</td>
+								<td class="px-2 py-1 text-xs">{entry.category}</td>
+								<td class="px-2 py-1 text-xs">{entry.subcategory}</td>
+								<td class="px-2 py-1" dir="ltr">
 									<button onclick={() => handleDelete(entry.key)}
 										class="text-red-400 hover:text-red-600 text-xs">delete</button>
 								</td>
@@ -172,24 +172,24 @@
 			<!-- Patterns -->
 			{#if patterns.length > 0}
 				<h3 class="text-sm font-medium text-gray-600 mb-2">Prefix Patterns ({patterns.length})</h3>
-				<table class="w-full text-sm">
+				<table class="w-full text-sm" dir="rtl">
 					<thead style="background: #f0f7fa;">
 						<tr>
-							<th class="px-2 py-1.5 text-left text-xs font-medium text-gray-600 rtl">Prefix</th>
-							<th class="px-2 py-1.5 text-left text-xs font-medium text-gray-600 rtl">Category</th>
-							<th class="px-2 py-1.5 text-left text-xs font-medium text-gray-600 rtl">
+							<th class="px-2 py-1.5 text-right text-xs font-medium text-gray-600">Prefix</th>
+							<th class="px-2 py-1.5 text-right text-xs font-medium text-gray-600">Category</th>
+							<th class="px-2 py-1.5 text-right text-xs font-medium text-gray-600">
 								{activeTab === 'income' ? 'Comments' : 'Subcategory'}
 							</th>
-							<th class="px-2 py-1.5 w-16"></th>
+							<th class="px-2 py-1.5 w-16" dir="ltr"></th>
 						</tr>
 					</thead>
 					<tbody>
 						{#each patterns as pat, i}
 							<tr class="border-t hover:bg-gray-50">
-								<td class="px-2 py-1 rtl text-xs">{pat.prefix}*</td>
-								<td class="px-2 py-1 rtl text-xs">{pat.category}</td>
-								<td class="px-2 py-1 rtl text-xs">{pat.subcategory}</td>
-								<td class="px-2 py-1">
+								<td class="px-2 py-1 text-xs">{pat.prefix}*</td>
+								<td class="px-2 py-1 text-xs">{pat.category}</td>
+								<td class="px-2 py-1 text-xs">{pat.subcategory}</td>
+								<td class="px-2 py-1" dir="ltr">
 									<button onclick={() => handleDeletePattern(i)}
 										class="text-red-400 hover:text-red-600 text-xs">delete</button>
 								</td>
