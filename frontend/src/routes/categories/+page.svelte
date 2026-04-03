@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { get, put } from '$lib/api';
+	import { get, put, post } from '$lib/api';
 
 	let categories = $state<Record<string, string[]>>({});
 	let original = $state<Record<string, string[]>>({});  // snapshot for detecting renames
@@ -129,9 +129,25 @@
 
 			const parts = [`${resp.categories} categories saved`];
 			if (resp.template_updated) parts.push('template updated');
-			if (resp.has_renames) parts.push('renames tracked for propagation');
-			success = parts.join(', ');
 
+			// Propagate renames to month data if any
+			const hasRenames = Object.keys(catRenames).length > 0 ||
+				Object.values(subRenames).some(v => Object.keys(v).length > 0);
+
+			if (hasRenames) {
+				const doPropagate = confirm(
+					'Category names were changed. Update all expenses in the current year to match?'
+				);
+				if (doPropagate) {
+					const propResp = await post<any>('/categories/propagate', {
+						renames: catRenames,
+						sub_renames: subRenames,
+					});
+					parts.push(`${propResp.cell_updates} cells + ${propResp.lookup_updates} lookups updated`);
+				}
+			}
+
+			success = parts.join('. ');
 			catRenames = {};
 			subRenames = {};
 		} catch (e: any) { error = e.message; }
