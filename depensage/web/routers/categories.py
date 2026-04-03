@@ -145,19 +145,13 @@ class PropagateRequest(BaseModel):
     removal_replacements: dict[str, str] = {}  # removed_cat → replacement_cat
 
 
-@router.post("/propagate")
-async def propagate_renames(req: PropagateRequest):
-    """Propagate category/subcategory renames across all months in the current year.
+def _scan_changes(handler, req: PropagateRequest):
+    """Scan all months and return a preview of changes without applying.
 
-    Updates:
-    - Expense rows: column F (category), column D (subcategory)
-    - Budget section: column G (category), column F (subcategory)
-    - Lookup tables: CC, bank, income classifiers
+    Returns: {month: [(cell_ref, old_value, new_value, section)]}
+    and lookup_changes: [(classifier, key, old_cat, new_cat)]
     """
-    main_handler, _ = _get_handlers()
     settings = load_settings()
-
-    # Get current year
     years = get_all_years(settings)
     current_year = max(years)
 
@@ -166,17 +160,14 @@ async def propagate_renames(req: PropagateRequest):
         "July", "August", "September", "October", "November", "December",
     ]
 
-    total_updates = 0
+    month_changes = {}  # month → list of change dicts
 
     for month in month_names:
-        if not main_handler.sheet_exists(month):
+        if not handler.sheet_exists(month):
             continue
 
-        updates = []
-
-        # Read expense rows (B:H = columns 1-7, 0-indexed in raw_data)
-        main_handler.invalidate_cache(month)
-        cached = main_handler._get_cached(month)
+        handler.invalidate_cache(month)
+        cached = handler._get_cached(month)
         if not cached:
             continue
 
@@ -184,7 +175,9 @@ async def propagate_renames(req: PropagateRequest):
         if not budget_marker:
             continue
 
-        # Scan expense rows (row 2 to budget_marker - 2)
+        changes = []
+
+        # Scan expense rows
         for row_idx in range(1, budget_marker - 2):
             if row_idx >= len(cached.raw_data):
                 break
@@ -192,83 +185,157 @@ async def propagate_renames(req: PropagateRequest):
             if len(row) < 6:
                 continue
 
-            cat = str(row[5]).strip() if row[5] else ""  # F = category (index 5)
-            sub = str(row[3]).strip() if row[3] else ""  # D = subcategory (index 3)
+            cat = str(row[5]).strip() if row[5] else ""
+            sub = str(row[3]).strip() if row[3] else ""
+            biz = str(row[1]).strip() if len(row) > 1 and row[1] else ""
 
-            # Category rename
             if cat in req.renames:
-                new_cat = req.renames[cat]
-                updates.append((f"F{row_idx + 1}", new_cat))
-
-            # Category removal → replacement
+                changes.append({
+                    "section": "expense", "cell": f"F{row_idx + 1}",
+                    "field": "category", "old": cat, "new": req.renames[cat],
+                    "context": biz,
+                })
             elif cat in req.removal_replacements:
-                updates.append((f"F{row_idx + 1}", req.removal_replacements[cat]))
+                changes.append({
+                    "section": "expense", "cell": f"F{row_idx + 1}",
+                    "field": "category", "old": cat, "new": req.removal_replacements[cat],
+                    "context": biz,
+                })
 
-            # Subcategory rename (within a category)
             effective_cat = req.renames.get(cat, cat)
             if effective_cat in req.sub_renames:
-                sub_map = req.sub_renames[effective_cat]
-                if sub in sub_map:
-                    updates.append((f"D{row_idx + 1}", sub_map[sub]))
+                new_sub = req.sub_renames[effective_cat].get(sub)
+                if new_sub:
+                    changes.append({
+                        "section": "expense", "cell": f"D{row_idx + 1}",
+                        "field": "subcategory", "old": sub, "new": new_sub,
+                        "context": biz,
+                    })
 
-        # Scan budget section for category/subcategory labels
+        # Scan budget section
         income_marker = cached.markers.get("income", budget_marker + 30)
         for row_idx in range(budget_marker - 1, min(income_marker - 1, len(cached.raw_data))):
             row = cached.raw_data[row_idx]
             if len(row) < 7:
                 continue
 
-            cat = str(row[6]).strip() if row[6] else ""  # G = category (index 6)
-            sub = str(row[5]).strip() if row[5] else ""  # F = subcategory (index 5)
+            cat = str(row[6]).strip() if row[6] else ""
+            sub = str(row[5]).strip() if row[5] else ""
 
             if cat in req.renames:
-                updates.append((f"G{row_idx + 1}", req.renames[cat]))
+                changes.append({
+                    "section": "budget", "cell": f"G{row_idx + 1}",
+                    "field": "category", "old": cat, "new": req.renames[cat],
+                    "context": "",
+                })
             elif cat in req.removal_replacements:
-                updates.append((f"G{row_idx + 1}", req.removal_replacements[cat]))
+                changes.append({
+                    "section": "budget", "cell": f"G{row_idx + 1}",
+                    "field": "category", "old": cat, "new": req.removal_replacements[cat],
+                    "context": "",
+                })
 
             effective_cat = req.renames.get(cat, cat)
             if effective_cat in req.sub_renames:
-                sub_map = req.sub_renames[effective_cat]
-                if sub in sub_map:
-                    updates.append((f"F{row_idx + 1}", sub_map[sub]))
+                new_sub = req.sub_renames[effective_cat].get(sub)
+                if new_sub:
+                    changes.append({
+                        "section": "budget", "cell": f"F{row_idx + 1}",
+                        "field": "subcategory", "old": sub, "new": new_sub,
+                        "context": "",
+                    })
 
-        if updates:
-            main_handler.batch_update_cells(month, updates)
-            total_updates += len(updates)
-            logger.info(f"Propagated {len(updates)} category updates to {month}")
+        if changes:
+            month_changes[month] = changes
 
-    # Update lookup tables
-    lookup_updates = 0
+    # Scan lookups
+    lookup_changes = []
     if req.renames or req.sub_renames or req.removal_replacements:
         from depensage.classifier.cc_lookup import LookupClassifier
         from depensage.classifier.bank_lookup import BankLookupClassifier
         from depensage.classifier.income_lookup import IncomeLookupClassifier
 
-        for cls in [LookupClassifier(), BankLookupClassifier(), IncomeLookupClassifier()]:
-            changed = False
-            for name, classification in list(cls.exact.items()):
+        for cls_name, cls in [("cc", LookupClassifier()), ("bank", BankLookupClassifier()), ("income", IncomeLookupClassifier())]:
+            for name, classification in cls.exact.items():
                 cat = classification.category
                 sub = getattr(classification, 'subcategory', '') or getattr(classification, 'comments', '')
 
                 new_cat = req.renames.get(cat, req.removal_replacements.get(cat))
                 if new_cat:
-                    classification.category = new_cat
-                    changed = True
-                    lookup_updates += 1
+                    lookup_changes.append({
+                        "classifier": cls_name, "key": name,
+                        "field": "category", "old": cat, "new": new_cat,
+                    })
 
                 effective_cat = new_cat or cat
                 if effective_cat in req.sub_renames:
                     new_sub = req.sub_renames[effective_cat].get(sub)
                     if new_sub:
-                        if hasattr(classification, 'subcategory'):
-                            classification.subcategory = new_sub
-                        elif hasattr(classification, 'comments'):
-                            classification.comments = new_sub
-                        changed = True
-                        lookup_updates += 1
+                        lookup_changes.append({
+                            "classifier": cls_name, "key": name,
+                            "field": "subcategory", "old": sub, "new": new_sub,
+                        })
 
-            if changed:
-                cls.save()
+    return month_changes, lookup_changes
+
+
+@router.post("/propagate/preview")
+async def preview_propagation(req: PropagateRequest):
+    """Preview what changes would be made without applying them."""
+    main_handler, _ = _get_handlers()
+    month_changes, lookup_changes = _scan_changes(main_handler, req)
+    total_cells = sum(len(c) for c in month_changes.values())
+    return {
+        "month_changes": month_changes,
+        "lookup_changes": lookup_changes,
+        "total_cells": total_cells,
+        "total_lookups": len(lookup_changes),
+    }
+
+
+@router.post("/propagate")
+async def propagate_renames(req: PropagateRequest):
+    """Apply category/subcategory renames across all months and lookups."""
+    main_handler, _ = _get_handlers()
+    month_changes, lookup_changes = _scan_changes(main_handler, req)
+
+    # Apply month changes
+    total_updates = 0
+    for month, changes in month_changes.items():
+        updates = [(c["cell"], c["new"]) for c in changes]
+        if updates:
+            main_handler.invalidate_cache(month)
+            main_handler.batch_update_cells(month, updates)
+            total_updates += len(updates)
+            logger.info(f"Propagated {len(updates)} category updates to {month}")
+
+    # Apply lookup changes
+    lookup_updates = 0
+    if lookup_changes:
+        from depensage.classifier.cc_lookup import LookupClassifier
+        from depensage.classifier.bank_lookup import BankLookupClassifier
+        from depensage.classifier.income_lookup import IncomeLookupClassifier
+
+        classifiers = {"cc": LookupClassifier(), "bank": BankLookupClassifier(), "income": IncomeLookupClassifier()}
+        changed_cls = set()
+
+        for lc in lookup_changes:
+            cls = classifiers[lc["classifier"]]
+            name = lc["key"]
+            if name in cls.exact:
+                classification = cls.exact[name]
+                if lc["field"] == "category":
+                    classification.category = lc["new"]
+                elif lc["field"] == "subcategory":
+                    if hasattr(classification, 'subcategory'):
+                        classification.subcategory = lc["new"]
+                    elif hasattr(classification, 'comments'):
+                        classification.comments = lc["new"]
+                changed_cls.add(lc["classifier"])
+                lookup_updates += 1
+
+        for cls_name in changed_cls:
+            classifiers[cls_name].save()
 
     return {
         "status": "propagated",

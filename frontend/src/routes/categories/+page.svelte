@@ -116,6 +116,14 @@
 		markDirty();
 	}
 
+	type ChangeItem = { section: string; cell: string; field: string; old: string; new: string; context: string };
+	type LookupChange = { classifier: string; key: string; field: string; old: string; new: string };
+	type Preview = { month_changes: Record<string, ChangeItem[]>; lookup_changes: LookupChange[]; total_cells: number; total_lookups: number };
+
+	let preview = $state<Preview | null>(null);
+	let pendingRenames = $state<{ renames: Record<string, string>; sub_renames: Record<string, Record<string, string>> } | null>(null);
+	let propagating = $state(false);
+
 	async function saveAll() {
 		saving = true; error = ''; success = '';
 		try {
@@ -129,29 +137,51 @@
 
 			const parts = [`${resp.categories} categories saved`];
 			if (resp.template_updated) parts.push('template updated');
+			success = parts.join('. ');
 
-			// Propagate renames to month data if any
+			// If renames exist, fetch preview
 			const hasRenames = Object.keys(catRenames).length > 0 ||
 				Object.values(subRenames).some(v => Object.keys(v).length > 0);
 
 			if (hasRenames) {
-				const doPropagate = confirm(
-					'Category names were changed. Update all expenses in the current year to match?'
-				);
-				if (doPropagate) {
-					const propResp = await post<any>('/categories/propagate', {
-						renames: catRenames,
-						sub_renames: subRenames,
-					});
-					parts.push(`${propResp.cell_updates} cells + ${propResp.lookup_updates} lookups updated`);
+				const prev = await post<Preview>('/categories/propagate/preview', {
+					renames: catRenames,
+					sub_renames: subRenames,
+				});
+				if (prev.total_cells > 0 || prev.total_lookups > 0) {
+					preview = prev;
+					pendingRenames = { renames: { ...catRenames }, sub_renames: { ...subRenames } };
+				} else {
+					catRenames = {};
+					subRenames = {};
 				}
+			} else {
+				catRenames = {};
+				subRenames = {};
 			}
+		} catch (e: any) { error = e.message; }
+		saving = false;
+	}
 
-			success = parts.join('. ');
+	async function applyPropagation() {
+		if (!pendingRenames) return;
+		propagating = true; error = '';
+		try {
+			const resp = await post<any>('/categories/propagate', pendingRenames);
+			success = `Propagated: ${resp.cell_updates} cells + ${resp.lookup_updates} lookups updated.`;
+			preview = null;
+			pendingRenames = null;
 			catRenames = {};
 			subRenames = {};
 		} catch (e: any) { error = e.message; }
-		saving = false;
+		propagating = false;
+	}
+
+	function cancelPropagation() {
+		preview = null;
+		pendingRenames = null;
+		catRenames = {};
+		subRenames = {};
 	}
 </script>
 
@@ -277,5 +307,87 @@
 		<p class="mt-4 text-xs text-gray-400">
 			Categories are saved to the current year's spreadsheet and the template. Double-click any name to rename.
 		</p>
+
+		<!-- Propagation preview -->
+		{#if preview}
+			<div class="mt-6 bg-white rounded-xl shadow-sm p-6" style="border: 1px solid #ebc46c;">
+				<h2 class="text-lg font-semibold text-primary-700 mb-3">
+					Rename Preview — {preview.total_cells} cell{preview.total_cells !== 1 ? 's' : ''} + {preview.total_lookups} lookup{preview.total_lookups !== 1 ? 's' : ''}
+				</h2>
+				<p class="text-xs text-gray-500 mb-4">
+					The following changes will be applied to all months in the current year. Review and confirm.
+				</p>
+
+				{#each Object.entries(preview.month_changes) as [month, changes]}
+					<div class="mb-4">
+						<h3 class="text-sm font-medium text-primary-600 mb-1">{month} ({changes.length} change{changes.length !== 1 ? 's' : ''})</h3>
+						<table class="w-full text-xs">
+							<thead style="background: #f0f7fa;">
+								<tr>
+									<th class="px-2 py-1 text-left text-gray-600">Section</th>
+									<th class="px-2 py-1 text-left text-gray-600">Cell</th>
+									<th class="px-2 py-1 text-left text-gray-600">Field</th>
+									<th class="px-2 py-1 text-left text-gray-600 rtl">Context</th>
+									<th class="px-2 py-1 text-left text-gray-600 rtl">Old</th>
+									<th class="px-2 py-1 text-left text-gray-600 rtl">New</th>
+								</tr>
+							</thead>
+							<tbody>
+								{#each changes as c}
+									<tr class="border-t">
+										<td class="px-2 py-0.5">{c.section}</td>
+										<td class="px-2 py-0.5 font-mono">{c.cell}</td>
+										<td class="px-2 py-0.5">{c.field}</td>
+										<td class="px-2 py-0.5 rtl">{c.context}</td>
+										<td class="px-2 py-0.5 rtl text-red-500 line-through">{c.old}</td>
+										<td class="px-2 py-0.5 rtl text-green-600 font-medium">{c.new}</td>
+									</tr>
+								{/each}
+							</tbody>
+						</table>
+					</div>
+				{/each}
+
+				{#if preview.lookup_changes.length > 0}
+					<div class="mb-4">
+						<h3 class="text-sm font-medium text-primary-600 mb-1">Lookup Tables ({preview.lookup_changes.length})</h3>
+						<table class="w-full text-xs">
+							<thead style="background: #f0f7fa;">
+								<tr>
+									<th class="px-2 py-1 text-left text-gray-600">Classifier</th>
+									<th class="px-2 py-1 text-left text-gray-600 rtl">Entry</th>
+									<th class="px-2 py-1 text-left text-gray-600">Field</th>
+									<th class="px-2 py-1 text-left text-gray-600 rtl">Old</th>
+									<th class="px-2 py-1 text-left text-gray-600 rtl">New</th>
+								</tr>
+							</thead>
+							<tbody>
+								{#each preview.lookup_changes as lc}
+									<tr class="border-t">
+										<td class="px-2 py-0.5">{lc.classifier.toUpperCase()}</td>
+										<td class="px-2 py-0.5 rtl">{lc.key}</td>
+										<td class="px-2 py-0.5">{lc.field}</td>
+										<td class="px-2 py-0.5 rtl text-red-500 line-through">{lc.old}</td>
+										<td class="px-2 py-0.5 rtl text-green-600 font-medium">{lc.new}</td>
+									</tr>
+								{/each}
+							</tbody>
+						</table>
+					</div>
+				{/if}
+
+				<div class="flex gap-3 mt-4">
+					<button
+						onclick={applyPropagation}
+						disabled={propagating}
+						class="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-50 text-sm font-medium"
+					>{propagating ? 'Applying...' : 'Apply All Changes'}</button>
+					<button
+						onclick={cancelPropagation}
+						class="px-4 py-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 text-sm"
+					>Skip Propagation</button>
+				</div>
+			</div>
+		{/if}
 	{/if}
 </div>
