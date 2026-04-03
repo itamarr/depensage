@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { get, put, post } from '$lib/api';
+	import ErrorBanner from '$lib/components/ErrorBanner.svelte';
 
 	let categories = $state<Record<string, string[]>>({});
 	let original = $state<Record<string, string[]>>({});  // snapshot for detecting renames
@@ -198,7 +199,7 @@
 	</div>
 
 	{#if error}
-		<div class="mb-4 p-3 bg-red-50 border border-red-200 rounded text-sm text-red-700">{error}</div>
+		<ErrorBanner message={error} ondismiss={() => error = ''} />
 	{/if}
 	{#if success}
 		<div class="mb-4 p-3 bg-green-50 border border-green-200 rounded text-sm text-green-700">{success}</div>

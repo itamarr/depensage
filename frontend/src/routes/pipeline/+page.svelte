@@ -2,6 +2,7 @@
 	import FileUpload from '$lib/components/FileUpload.svelte';
 	import ProgressBar from '$lib/components/ProgressBar.svelte';
 	import CategoryPicker from '$lib/components/CategoryPicker.svelte';
+	import ErrorBanner from '$lib/components/ErrorBanner.svelte';
 	import { uploadFiles, post, get, put, subscribeProgress } from '$lib/api';
 	import { sessionId } from '$lib/stores';
 
@@ -299,10 +300,7 @@
 	</div>
 
 	{#if error}
-		<div class="mb-4 p-3 bg-red-50 border border-red-200 rounded text-sm text-red-700">
-			{error}
-			<button onclick={() => error = ''} class="ml-2 underline">dismiss</button>
-		</div>
+		<ErrorBanner message={error} ondismiss={() => error = ''} />
 	{/if}
 
 	<!-- Step 1: Upload -->

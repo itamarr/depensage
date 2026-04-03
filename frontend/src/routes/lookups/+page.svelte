@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { get, post, put, del } from '$lib/api';
 	import CategoryPicker from '$lib/components/CategoryPicker.svelte';
+	import ErrorBanner from '$lib/components/ErrorBanner.svelte';
 
 	type Entry = { key: string; category: string; subcategory: string };
 	type PatternEntry = { prefix: string; category: string; subcategory: string };
@@ -118,7 +119,7 @@
 	</div>
 
 	{#if error}
-		<div class="mb-4 p-3 bg-red-50 border border-red-200 rounded text-sm text-red-700">{error}</div>
+		<ErrorBanner message={error} ondismiss={() => error = ''} />
 	{/if}
 
 	<div class="bg-white rounded-xl shadow-sm p-4" style="border: 1px solid #b3dbe9;">

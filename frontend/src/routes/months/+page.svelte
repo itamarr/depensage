@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { get } from '$lib/api';
+	import ErrorBanner from '$lib/components/ErrorBanner.svelte';
 
 	type MonthEntry = { month: string; year: number };
 	let months = $state<MonthEntry[]>([]);
@@ -30,7 +31,7 @@
 	<h1 class="text-2xl font-bold text-primary-800 mb-6">Months</h1>
 
 	{#if error}
-		<div class="mb-4 p-3 bg-red-50 border border-red-200 rounded text-sm text-red-700">{error}</div>
+		<ErrorBanner message={error} ondismiss={() => error = ''} />
 	{/if}
 
 	{#if loading}

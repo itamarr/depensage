@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { get, post, put, del } from '$lib/api';
+	import ErrorBanner from '$lib/components/ErrorBanner.svelte';
 
 	type SpreadsheetEntry = { id: string; year: number | null; default: boolean };
 
@@ -120,7 +121,7 @@
 	<h1 class="text-2xl font-bold text-primary-800 mb-6">Settings</h1>
 
 	{#if error}
-		<div class="mb-4 p-3 bg-red-50 border border-red-200 rounded text-sm text-red-700">{error}</div>
+		<ErrorBanner message={error} ondismiss={() => error = ''} />
 	{/if}
 	{#if success}
 		<div class="mb-4 p-3 bg-green-50 border border-green-200 rounded text-sm text-green-700">{success}</div>
