@@ -15,13 +15,17 @@
 	let addYear = $state<number | null>(null);
 	let addDefault = $state(false);
 
-	// Password form
+	// Edit form
+	let editKey = $state<string | null>(null);
+	let editId = $state('');
+	let editYear = $state<number | null>(null);
+	let editDefault = $state(false);
+
+	// Password
 	let newPassword = $state('');
 	let confirmPassword = $state('');
 
-	$effect(() => {
-		loadSpreadsheets();
-	});
+	$effect(() => { loadSpreadsheets(); });
 
 	async function loadSpreadsheets() {
 		loading = true; error = '';
@@ -44,9 +48,29 @@
 		} catch (e: any) { error = e.message; }
 	}
 
-	async function handleSetDefault(key: string) {
-		error = ''; success = '';
+	function startEdit(key: string) {
 		const entry = spreadsheets[key];
+		editKey = key;
+		editId = entry.id.replace('...', '');  // truncated, user may paste full ID
+		editYear = entry.year;
+		editDefault = entry.default;
+	}
+
+	async function saveEdit(key: string) {
+		error = ''; success = '';
+		try {
+			await put(`/system/spreadsheets/${encodeURIComponent(key)}`, {
+				spreadsheet_id: editId || '', year: editYear, default: editDefault,
+			});
+			editKey = null;
+			success = `${key} updated`;
+			await loadSpreadsheets();
+		} catch (e: any) { error = e.message; }
+	}
+
+	async function handleSetDefault(key: string) {
+		const entry = spreadsheets[key];
+		error = ''; success = '';
 		try {
 			await put(`/system/spreadsheets/${encodeURIComponent(key)}`, {
 				spreadsheet_id: '', year: entry.year, default: true,
@@ -107,7 +131,7 @@
 					</label>
 					<label class="text-xs text-gray-600">
 						Spreadsheet ID
-						<input bind:value={addId} placeholder="Google Sheets ID" class="block w-full border rounded px-2 py-1 text-sm mt-0.5" />
+						<input bind:value={addId} placeholder="Paste from URL" class="block w-full border rounded px-2 py-1 text-sm mt-0.5 font-mono text-xs" />
 					</label>
 					<label class="text-xs text-gray-600">
 						Year
@@ -136,30 +160,56 @@
 						<th class="px-3 py-2 text-left text-xs font-medium text-gray-600">ID</th>
 						<th class="px-3 py-2 text-center text-xs font-medium text-gray-600">Year</th>
 						<th class="px-3 py-2 text-center text-xs font-medium text-gray-600">Default</th>
-						<th class="px-3 py-2 w-24"></th>
+						<th class="px-3 py-2 w-28"></th>
 					</tr>
 				</thead>
 				<tbody>
 					{#each Object.entries(spreadsheets) as [key, entry]}
-						<tr class="border-t hover:bg-gray-50">
-							<td class="px-3 py-2 text-xs font-medium">{key}</td>
-							<td class="px-3 py-2 text-xs text-gray-500">{entry.id}</td>
-							<td class="px-3 py-2 text-xs text-center">{entry.year || '—'}</td>
-							<td class="px-3 py-2 text-center">
-								{#if entry.default}
-									<span class="text-xs px-1.5 py-0.5 rounded bg-green-100 text-green-700">default</span>
-								{:else}
-									<button onclick={() => handleSetDefault(key)} class="text-xs text-primary-500 hover:text-primary-700">set default</button>
-								{/if}
-							</td>
-							<td class="px-3 py-2">
-								<button onclick={() => handleRemove(key)} class="text-xs text-red-400 hover:text-red-600">remove</button>
-							</td>
-						</tr>
+						{#if editKey === key}
+							<tr class="border-t" style="background: #f0f7fa;">
+								<td class="px-3 py-2 text-xs font-medium">{key}</td>
+								<td class="px-3 py-2">
+									<input bind:value={editId} class="text-xs border rounded px-1 py-0.5 w-full font-mono" placeholder="Spreadsheet ID" />
+								</td>
+								<td class="px-3 py-2">
+									<input type="number" bind:value={editYear} class="text-xs border rounded px-1 py-0.5 w-16 text-center" />
+								</td>
+								<td class="px-3 py-2 text-center">
+									<input type="checkbox" bind:checked={editDefault} />
+								</td>
+								<td class="px-3 py-2">
+									<button onclick={() => saveEdit(key)} class="text-xs text-green-600 hover:text-green-800 mr-1">save</button>
+									<button onclick={() => editKey = null} class="text-xs text-gray-400 hover:text-gray-600">cancel</button>
+								</td>
+							</tr>
+						{:else}
+							<tr class="border-t hover:bg-gray-50">
+								<td class="px-3 py-2 text-xs font-medium">{key}</td>
+								<td class="px-3 py-2 text-xs text-gray-500 font-mono">{entry.id}</td>
+								<td class="px-3 py-2 text-xs text-center">{entry.year || '—'}</td>
+								<td class="px-3 py-2 text-center">
+									{#if entry.default}
+										<span class="text-xs px-1.5 py-0.5 rounded bg-green-100 text-green-700">default</span>
+									{:else}
+										<button onclick={() => handleSetDefault(key)} class="text-xs text-primary-500 hover:text-primary-700">set default</button>
+									{/if}
+								</td>
+								<td class="px-3 py-2">
+									<button onclick={() => startEdit(key)} class="text-xs text-primary-600 hover:text-primary-800 mr-1">edit</button>
+									<button onclick={() => handleRemove(key)} class="text-xs text-red-400 hover:text-red-600">remove</button>
+								</td>
+							</tr>
+						{/if}
 					{/each}
 				</tbody>
 			</table>
 		{/if}
+
+		<div class="mt-4 p-3 rounded text-xs text-gray-500" style="background: #f8fafb;">
+			<strong>How to find the Spreadsheet ID:</strong> Open the spreadsheet in Google Sheets.
+			The URL looks like <code class="text-xs">docs.google.com/spreadsheets/d/<strong>SPREADSHEET_ID</strong>/edit</code>.
+			Copy the long string between <code>/d/</code> and <code>/edit</code>.
+		</div>
 	</div>
 
 	<!-- Password -->
