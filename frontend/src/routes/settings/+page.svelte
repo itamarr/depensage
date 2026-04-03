@@ -17,6 +17,7 @@
 
 	// Edit form
 	let editKey = $state<string | null>(null);
+	let editNewKey = $state('');
 	let editId = $state('');
 	let editYear = $state<number | null>(null);
 	let editDefault = $state(false);
@@ -51,19 +52,32 @@
 	function startEdit(key: string) {
 		const entry = spreadsheets[key];
 		editKey = key;
+		editNewKey = key;
 		editId = entry.id.replace('...', '');  // truncated, user may paste full ID
 		editYear = entry.year;
 		editDefault = entry.default;
 	}
 
-	async function saveEdit(key: string) {
+	async function saveEdit(oldKey: string) {
 		error = ''; success = '';
+		const newKey = editNewKey.trim();
+		if (!newKey) { error = 'Key cannot be empty'; return; }
+
 		try {
-			await put(`/system/spreadsheets/${encodeURIComponent(key)}`, {
-				spreadsheet_id: editId || '', year: editYear, default: editDefault,
-			});
+			if (newKey !== oldKey) {
+				// Rename: create new, delete old
+				await post(`/system/spreadsheets/${encodeURIComponent(newKey)}`, {
+					spreadsheet_id: editId || '', year: editYear, default: editDefault,
+				});
+				await del(`/system/spreadsheets/${encodeURIComponent(oldKey)}`);
+				success = `Renamed ${oldKey} → ${newKey}`;
+			} else {
+				await put(`/system/spreadsheets/${encodeURIComponent(oldKey)}`, {
+					spreadsheet_id: editId || '', year: editYear, default: editDefault,
+				});
+				success = `${oldKey} updated`;
+			}
 			editKey = null;
-			success = `${key} updated`;
 			await loadSpreadsheets();
 		} catch (e: any) { error = e.message; }
 	}
@@ -167,7 +181,9 @@
 					{#each Object.entries(spreadsheets) as [key, entry]}
 						{#if editKey === key}
 							<tr class="border-t" style="background: #f0f7fa;">
-								<td class="px-3 py-2 text-xs font-medium">{key}</td>
+								<td class="px-3 py-2">
+									<input bind:value={editNewKey} class="text-xs border rounded px-1 py-0.5 w-full font-medium" />
+								</td>
 								<td class="px-3 py-2">
 									<input bind:value={editId} class="text-xs border rounded px-1 py-0.5 w-full font-mono" placeholder="Spreadsheet ID" />
 								</td>
