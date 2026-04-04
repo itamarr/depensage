@@ -431,6 +431,13 @@ class StagedPipelineResult:
                 income_duplicates=stage.income_duplicates,
             ))
 
+        # Update Merged Expenses/Income ARRAYFORMULA for new months
+        new_months = [s.month for s in self.sorted_stages() if s.is_new]
+        if new_months:
+            # Use the first handler (all new months are same year)
+            first_handler = get_handler(self.sorted_stages()[0].year)
+            _update_merged_formulas(first_handler, new_months)
+
         return PipelineResult(
             total_parsed=self.total_parsed,
             in_process_skipped=self.in_process_skipped,
@@ -441,6 +448,60 @@ class StagedPipelineResult:
             cc_lump_sums=self.cc_lump_sums,
         )
 
+
+
+def _update_merged_formulas(handler, new_months):
+    """Update Merged Expenses/Income ARRAYFORMULA to include new months.
+
+    Reads the current formula from cell A2 of each Merged sheet,
+    appends the new month ranges, and writes back.
+    """
+    merged_sheets = {
+        "Merged Expenses": "D2:F120",  # subcategory, amount, category
+        "Merged Income": "D2:G120",    # comments, amount, category, date
+    }
+
+    for sheet_name, col_range in merged_sheets.items():
+        if not handler.sheet_exists(sheet_name):
+            continue
+
+        try:
+            # Read current formula
+            result = handler.sheets_service.values().get(
+                spreadsheetId=handler.spreadsheet_id,
+                range=f"'{sheet_name}'!A2",
+                valueRenderOption="FORMULA",
+            ).execute()
+            values = result.get("values", [])
+            if not values or not values[0]:
+                continue
+
+            formula = values[0][0]
+            if not isinstance(formula, str) or "arrayformula" not in formula.lower():
+                continue
+
+            # Append new month ranges before the closing })
+            # Formula looks like: =arrayformula({Jan!D2:F120; Feb!D2:F120})
+            for month in new_months:
+                month_ref = f"{month}!{col_range}"
+                if month_ref not in formula:
+                    # Insert before the closing })
+                    formula = formula.rstrip(")")
+                    formula = formula.rstrip("}")
+                    formula = formula.rstrip()
+                    formula += f"; {month_ref}" + "})"
+
+            # Write updated formula
+            handler.sheets_service.values().update(
+                spreadsheetId=handler.spreadsheet_id,
+                range=f"'{sheet_name}'!A2",
+                valueInputOption="USER_ENTERED",
+                body={"values": [[formula]]},
+            ).execute()
+
+            logger.info(f"Updated {sheet_name} ARRAYFORMULA with {new_months}")
+        except Exception as e:
+            logger.warning(f"Failed to update {sheet_name} formula: {e}")
 
 
 def _cell_str(value):
