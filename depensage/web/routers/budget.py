@@ -161,38 +161,23 @@ async def save_budget(req: BudgetSaveRequest):
         if u.carry_status is not None:
             cell_updates.append((f"H{u.row_number}", u.carry_status))
 
-    # Deletions: clear the row content (B through H)
+    # Deletions: clear data columns only (D, F, G, H) + regenerate B, C as empty
     for row in req.deletions:
-        for col in "BCDEFGH":
+        for col in "BCDFGH":
             cell_updates.append((f"{col}{row}", ""))
 
-    # Additions: find the last budget row and write after it
-    # (This is complex — additions need row insertion. For now,
-    # we write to the first available empty row before the total row.)
-    if req.additions:
-        vm = load_from_sheet(main_handler, "Month Template", year)
-        # Find the total row (last budget line + 1, or marker - 3)
-        if vm.budget_lines:
-            last_row = max(bl.row_number for bl in vm.budget_lines)
-        else:
-            last_row = vm.budget_marker_row - 4
-        # Write additions starting after last budget line
-        for i, addition in enumerate(req.additions):
-            row = last_row + 1 + i
-            cell_updates.append((f"G{row}", addition.get("category", "")))
-            cell_updates.append((f"F{row}", addition.get("subcategory", "")))
-            cell_updates.append((f"D{row}", addition.get("budget_amount", 0)))
-            cell_updates.append((f"H{row}", addition.get("carry_status", "")))
-
-    # Full rewrite (when rows are reordered)
+    # Full rewrite (reorder, add, delete all handled here)
     if req.full_rewrite is not None:
         vm = load_from_sheet(main_handler, "Month Template", year)
         if vm.budget_lines:
             first_row = min(bl.row_number for bl in vm.budget_lines)
-            # Clear all existing budget data rows
-            for bl in vm.budget_lines:
-                for col in "BCDEFGH":
-                    cell_updates.append((f"{col}{bl.row_number}", ""))
+            last_existing = max(bl.row_number for bl in vm.budget_lines)
+
+            # Clear all existing budget rows (D, F, G, H only — leave E/accumulated alone)
+            for r in range(first_row, last_existing + 1):
+                for col in "BCDFGH":
+                    cell_updates.append((f"{col}{r}", ""))
+
             # Write new order starting from first_row
             for i, line in enumerate(req.full_rewrite):
                 row = first_row + i
@@ -200,6 +185,43 @@ async def save_budget(req: BudgetSaveRequest):
                 cell_updates.append((f"F{row}", line.subcategory))
                 cell_updates.append((f"D{row}", line.budget_amount))
                 cell_updates.append((f"H{row}", line.carry_status))
+
+                # Regenerate B formula: remaining = budget - expenses + accumulated
+                cell_updates.append((f"B{row}", f"=D{row}-C{row}+E{row}"))
+
+                # Regenerate C formula: SUMIFS based on subcategory or category
+                if line.subcategory:
+                    # Match by subcategory (column D in expense area)
+                    cell_updates.append((
+                        f"C{row}",
+                        f"=sumifs(E2:E120,D2:D120,T(F{row}))"
+                    ))
+                else:
+                    # Match by category (column F in expense area)
+                    cell_updates.append((
+                        f"C{row}",
+                        f"=sumifs(E2:E120,F2:F120,T(G{row}))"
+                    ))
+    elif req.additions:
+        # Additions without full rewrite: append after last budget line
+        vm = load_from_sheet(main_handler, "Month Template", year)
+        if vm.budget_lines:
+            last_row = max(bl.row_number for bl in vm.budget_lines)
+        else:
+            last_row = vm.budget_marker_row - 4
+        for i, addition in enumerate(req.additions):
+            row = last_row + 1 + i
+            cat = addition.get("category", "")
+            sub = addition.get("subcategory", "")
+            cell_updates.append((f"G{row}", cat))
+            cell_updates.append((f"F{row}", sub))
+            cell_updates.append((f"D{row}", addition.get("budget_amount", 0)))
+            cell_updates.append((f"H{row}", addition.get("carry_status", "")))
+            cell_updates.append((f"B{row}", f"=D{row}-C{row}+E{row}"))
+            if sub:
+                cell_updates.append((f"C{row}", f"=sumifs(E2:E120,D2:D120,T(F{row}))"))
+            else:
+                cell_updates.append((f"C{row}", f"=sumifs(E2:E120,F2:F120,T(G{row}))"))
 
     if not cell_updates:
         return {"status": "no changes"}
