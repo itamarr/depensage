@@ -193,13 +193,17 @@
 			}
 
 			const resp = await put<any>('/budget/', payload);
-			dirty = false; reordered = false;
-			lines = lines.filter(l => !l._deleted).map(l => ({ ...l, _new: false }));
-			originalLines = JSON.stringify(lines);
 
 			const parts = [`${resp.cells_written} cells written`];
 			if (resp.template_updated) parts.push('template updated');
 			success = parts.join(', ');
+
+			// Reload fresh data from server to get correct row numbers
+			const freshData = await get<any>('/budget/');
+			lines = freshData.lines;
+			averages = freshData.averages;
+			originalLines = JSON.stringify(freshData.lines);
+			dirty = false; reordered = false;
 		} catch (e: any) { error = e.message; }
 		saving = false;
 	}
