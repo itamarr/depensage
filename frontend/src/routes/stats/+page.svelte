@@ -6,8 +6,8 @@
 
 	Chart.register(...registerables);
 
-	type ExpenseRow = { category: string; subcategory: string; total: number; average: number; is_total?: boolean };
-	type IncomeRow = { category: string; total: number; average: number };
+	type ExpenseRow = { category: string; subcategory: string; total: number; average: number; is_total?: boolean; is_grand?: boolean };
+	type IncomeRow = { category: string; details: string; total: number; average: number; is_grand?: boolean };
 	type MonthData = { month: string; expenses: number; income: number; savings_budget: number };
 	type SavingsGoal = { goal_name: string; target: number; total: number; progress: number };
 
@@ -17,6 +17,7 @@
 	let monthCount = $state(0);
 
 	let expenseRows = $state<ExpenseRow[]>([]);
+	let budget = $state<Record<string, number>>({});
 	let incomeRows = $state<IncomeRow[]>([]);
 	let monthlyData = $state<MonthData[]>([]);
 	let savingsGoals = $state<SavingsGoal[]>([]);
@@ -29,12 +30,20 @@
 	let showIncome = $state(true);
 	let showSavings = $state(true);
 
+	// Collapsible categories in budget table
+	let expandedCats = $state<Set<string>>(new Set());
+
+	function toggleCat(cat: string) {
+		const s = new Set(expandedCats);
+		if (s.has(cat)) s.delete(cat); else s.add(cat);
+		expandedCats = s;
+	}
+
 	// Chart canvases
 	let budgetChartEl: HTMLCanvasElement;
 	let pieChartEl: HTMLCanvasElement;
 	let trendChartEl: HTMLCanvasElement;
 	let savingsChartEl: HTMLCanvasElement;
-
 	let charts: Chart[] = [];
 
 	onMount(async () => {
@@ -48,6 +57,7 @@
 			year = expResp.year;
 			monthCount = expResp.month_count;
 			expenseRows = expResp.rows;
+			budget = expResp.budget || {};
 			incomeRows = incResp.rows;
 			monthlyData = monthResp.months;
 			savingsGoals = savResp.goals;
@@ -56,13 +66,10 @@
 		loading = false;
 	});
 
-	// Render charts after data loads and elements mount
 	$effect(() => {
 		if (loading) return;
-		// Cleanup old charts
 		charts.forEach(c => c.destroy());
 		charts = [];
-
 		setTimeout(() => {
 			renderBudgetChart();
 			renderPieChart();
@@ -71,17 +78,21 @@
 		}, 50);
 	});
 
+	// Budget vs Actual bar chart — category totals with budget comparison
 	function renderBudgetChart() {
 		if (!budgetChartEl || !expenseRows.length) return;
-		// Top-level categories only (rows where category is non-empty and subcategory is empty or it's a total)
-		const cats = expenseRows.filter(r => r.is_total && r.category !== 'Grand Total');
+		const cats = expenseRows.filter(r => r.is_total && !r.is_grand);
+		const budgetVals = cats.map(r => {
+			const key = r.category;
+			return budget[key] || 0;
+		});
 		charts.push(new Chart(budgetChartEl, {
 			type: 'bar',
 			data: {
 				labels: cats.map(r => r.category),
 				datasets: [
-					{ label: 'Total', data: cats.map(r => r.total), backgroundColor: '#4a9ab4' },
-					{ label: 'Monthly Avg', data: cats.map(r => r.average), backgroundColor: '#e5af42' },
+					{ label: 'Monthly Budget', data: budgetVals, backgroundColor: '#b3dbe9' },
+					{ label: 'Monthly Avg Spent', data: cats.map(r => r.average), backgroundColor: '#e5af42' },
 				],
 			},
 			options: {
@@ -92,23 +103,18 @@
 		}));
 	}
 
+	// Pie chart — only category totals, no Grand Total or subcategories
 	function renderPieChart() {
 		if (!pieChartEl || !expenseRows.length) return;
-		const cats = expenseRows.filter(r => r.is_total && r.total > 0 && r.category !== 'Grand Total');
+		const cats = expenseRows.filter(r => r.is_total && !r.is_grand && r.total > 0);
 		const colors = ['#4a9ab4','#e5af42','#2f6577','#ebc46c','#7cc0d6','#b87420','#99561d','#3a7d94','#d4952a','#295463','#f2da9e','#264652','#68391c','#1e3844'];
 		charts.push(new Chart(pieChartEl, {
 			type: 'pie',
 			data: {
 				labels: cats.map(r => r.category),
-				datasets: [{
-					data: cats.map(r => r.total),
-					backgroundColor: colors.slice(0, cats.length),
-				}],
+				datasets: [{ data: cats.map(r => r.total), backgroundColor: colors.slice(0, cats.length) }],
 			},
-			options: {
-				responsive: true,
-				plugins: { legend: { position: 'right' } },
-			},
+			options: { responsive: true, plugins: { legend: { position: 'right' } } },
 		}));
 	}
 
@@ -119,24 +125,15 @@
 			data: {
 				labels: monthlyData.map(m => m.month.slice(0, 3)),
 				datasets: [
-					{
-						label: 'Expenses', data: monthlyData.map(m => m.expenses),
-						borderColor: '#e5af42', backgroundColor: '#e5af4233', fill: true,
-					},
-					{
-						label: 'Income', data: monthlyData.map(m => m.income),
-						borderColor: '#4a9ab4', backgroundColor: '#4a9ab433', fill: true,
-					},
+					{ label: 'Expenses', data: monthlyData.map(m => m.expenses), borderColor: '#e5af42', backgroundColor: '#e5af4233', fill: true },
+					{ label: 'Income', data: monthlyData.map(m => m.income), borderColor: '#4a9ab4', backgroundColor: '#4a9ab433', fill: true },
 				],
 			},
-			options: {
-				responsive: true,
-				plugins: { legend: { position: 'top' } },
-				scales: { y: { beginAtZero: true } },
-			},
+			options: { responsive: true, plugins: { legend: { position: 'top' } }, scales: { y: { beginAtZero: true } } },
 		}));
 	}
 
+	// Savings chart — vertical bars (not horizontal)
 	function renderSavingsChart() {
 		if (!savingsChartEl || !savingsGoals.length) return;
 		const goals = savingsGoals.filter(g => g.target > 0);
@@ -151,14 +148,57 @@
 			},
 			options: {
 				responsive: true,
-				indexAxis: 'y',
 				plugins: { legend: { position: 'top' } },
-				scales: { x: { beginAtZero: true } },
+				scales: { y: { beginAtZero: true } },
 			},
 		}));
 	}
 
 	function fmtNum(n: number) { return n.toLocaleString(undefined, { maximumFractionDigits: 0 }); }
+
+	// Group expense rows by category for collapsible display
+	type CatGroup = { category: string; total: number; average: number; budget: number; subcats: ExpenseRow[] };
+	const catGroups = $derived((): CatGroup[] => {
+		const groups: CatGroup[] = [];
+		let current: CatGroup | null = null;
+
+		for (const row of expenseRows) {
+			if (row.is_grand) continue;
+			if (row.is_total) {
+				if (current) {
+					current.total = row.total;
+					current.average = row.average;
+					groups.push(current);
+					current = null;
+				}
+				continue;
+			}
+			if (row.category && !row.subcategory) {
+				// Category with no subcategory (single row)
+				if (current) groups.push(current);
+				current = { category: row.category, total: row.total, average: row.average, budget: budget[row.category] || 0, subcats: [] };
+			} else if (row.category && row.subcategory) {
+				// First subcategory of a new category
+				if (current) groups.push(current);
+				current = { category: row.category, total: 0, average: 0, budget: 0, subcats: [] };
+				current.subcats.push(row);
+			} else if (!row.category && row.subcategory && current) {
+				// Additional subcategory
+				current.subcats.push(row);
+			}
+		}
+		if (current) groups.push(current);
+
+		// Fill budget for subcategorized groups
+		for (const g of groups) {
+			if (g.subcats.length > 0 && g.budget === 0) {
+				g.budget = g.subcats.reduce((sum, s) => sum + (budget[`${g.category}/${s.subcategory}`] || 0), 0);
+			}
+		}
+		return groups;
+	});
+
+	const grandTotal = $derived(expenseRows.find(r => r.is_grand));
 </script>
 
 <div class="max-w-5xl">
@@ -182,27 +222,53 @@
 			</button>
 			{#if showBudget}
 				<div class="px-4 pb-4 space-y-4">
-					{#if expenseRows.length > 0}
+					{#if catGroups().length > 0}
 						<div style="max-height: 400px;"><canvas bind:this={budgetChartEl}></canvas></div>
 						<div class="overflow-x-auto">
 							<table class="w-full text-sm" dir="rtl">
 								<thead style="background: #f0f7fa;">
 									<tr>
 										<th class="px-2 py-1.5 text-right text-xs font-medium text-gray-600">Category</th>
-										<th class="px-2 py-1.5 text-right text-xs font-medium text-gray-600">Subcategory</th>
+										<th class="px-2 py-1.5 text-left text-xs font-medium text-gray-600">Budget</th>
 										<th class="px-2 py-1.5 text-left text-xs font-medium text-gray-600">Total</th>
 										<th class="px-2 py-1.5 text-left text-xs font-medium text-gray-600">Monthly Avg</th>
 									</tr>
 								</thead>
 								<tbody>
-									{#each expenseRows as row}
-										<tr class="border-t {row.is_total ? 'font-semibold bg-gray-50' : 'hover:bg-gray-50'} {row.category === 'Grand Total' ? 'bg-gray-100 font-bold' : ''}">
-											<td class="px-2 py-1 text-xs">{row.category}</td>
-											<td class="px-2 py-1 text-xs">{row.subcategory}</td>
-											<td class="px-2 py-1 text-xs text-left">{fmtNum(row.total)}</td>
-											<td class="px-2 py-1 text-xs text-left">{fmtNum(row.average)}</td>
+									{#each catGroups() as group}
+										<tr
+											class="border-t font-medium cursor-pointer hover:bg-gray-50"
+											onclick={() => { if (group.subcats.length > 0) toggleCat(group.category); }}
+										>
+											<td class="px-2 py-1.5 text-xs">
+												{#if group.subcats.length > 0}
+													<span class="text-gray-400 mr-1">{expandedCats.has(group.category) ? '▼' : '▶'}</span>
+												{/if}
+												{group.category}
+											</td>
+											<td class="px-2 py-1.5 text-xs text-left">{group.budget ? fmtNum(group.budget) : '—'}</td>
+											<td class="px-2 py-1.5 text-xs text-left">{fmtNum(group.total)}</td>
+											<td class="px-2 py-1.5 text-xs text-left {group.average > group.budget && group.budget > 0 ? 'text-red-500' : ''}">{fmtNum(group.average)}</td>
 										</tr>
+										{#if expandedCats.has(group.category)}
+											{#each group.subcats as sub}
+												<tr class="border-t bg-gray-50">
+													<td class="px-2 py-1 text-xs pr-6">{sub.subcategory}</td>
+													<td class="px-2 py-1 text-xs text-left">{budget[`${group.category}/${sub.subcategory}`] ? fmtNum(budget[`${group.category}/${sub.subcategory}`]) : '—'}</td>
+													<td class="px-2 py-1 text-xs text-left">{fmtNum(sub.total)}</td>
+													<td class="px-2 py-1 text-xs text-left">{fmtNum(sub.average)}</td>
+												</tr>
+											{/each}
+										{/if}
 									{/each}
+									{#if grandTotal}
+										<tr class="border-t bg-gray-100 font-bold">
+											<td class="px-2 py-1.5 text-xs">Grand Total</td>
+											<td class="px-2 py-1.5 text-xs text-left"></td>
+											<td class="px-2 py-1.5 text-xs text-left">{fmtNum(grandTotal.total)}</td>
+											<td class="px-2 py-1.5 text-xs text-left">{fmtNum(grandTotal.average)}</td>
+										</tr>
+									{/if}
 								</tbody>
 							</table>
 						</div>
@@ -213,7 +279,7 @@
 			{/if}
 		</div>
 
-		<!-- Section 2: Category Breakdown (Pie) -->
+		<!-- Section 2: Spending by Category (Pie) -->
 		<div class="mb-6 bg-white rounded-xl shadow-sm" style="border: 1px solid #b3dbe9;">
 			<button onclick={() => showPie = !showPie} class="w-full text-left p-4 flex items-center justify-between">
 				<h2 class="text-lg font-semibold text-primary-700">Spending by Category</h2>
@@ -221,16 +287,12 @@
 			</button>
 			{#if showPie}
 				<div class="px-4 pb-4">
-					{#if expenseRows.length > 0}
-						<div style="max-width: 500px; margin: 0 auto;"><canvas bind:this={pieChartEl}></canvas></div>
-					{:else}
-						<p class="text-sm text-gray-400">No data.</p>
-					{/if}
+					<div style="max-width: 500px; margin: 0 auto;"><canvas bind:this={pieChartEl}></canvas></div>
 				</div>
 			{/if}
 		</div>
 
-		<!-- Section 3: Month-over-Month Trends -->
+		<!-- Section 3: Monthly Trends -->
 		<div class="mb-6 bg-white rounded-xl shadow-sm" style="border: 1px solid #b3dbe9;">
 			<button onclick={() => showTrends = !showTrends} class="w-full text-left p-4 flex items-center justify-between">
 				<h2 class="text-lg font-semibold text-primary-700">Monthly Trends</h2>
@@ -260,14 +322,16 @@
 							<thead style="background: #f0f7fa;">
 								<tr>
 									<th class="px-2 py-1.5 text-right text-xs font-medium text-gray-600">Category</th>
+									<th class="px-2 py-1.5 text-right text-xs font-medium text-gray-600">Details</th>
 									<th class="px-2 py-1.5 text-left text-xs font-medium text-gray-600">Total</th>
 									<th class="px-2 py-1.5 text-left text-xs font-medium text-gray-600">Monthly Avg</th>
 								</tr>
 							</thead>
 							<tbody>
 								{#each incomeRows as row}
-									<tr class="border-t hover:bg-gray-50">
+									<tr class="border-t {row.is_grand ? 'bg-gray-100 font-bold' : 'hover:bg-gray-50'}">
 										<td class="px-2 py-1 text-xs">{row.category}</td>
+										<td class="px-2 py-1 text-xs">{row.details}</td>
 										<td class="px-2 py-1 text-xs text-left">{fmtNum(row.total)}</td>
 										<td class="px-2 py-1 text-xs text-left">{fmtNum(row.average)}</td>
 									</tr>
@@ -311,7 +375,7 @@
 										<td class="px-2 py-1 text-xs text-left">{fmtNum(goal.total)}</td>
 										<td class="px-2 py-1 text-xs text-left">
 											{#if goal.target > 0}
-												<div class="flex items-center gap-2">
+												<div class="flex items-center gap-2" style="direction:ltr;">
 													<div class="w-16 h-2 bg-gray-200 rounded-full overflow-hidden">
 														<div class="h-full rounded-full" style="width: {Math.min(goal.progress, 100)}%; background: {goal.progress >= 100 ? '#22c55e' : '#4a9ab4'};"></div>
 													</div>

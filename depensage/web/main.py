@@ -27,14 +27,22 @@ def _setup_logging():
     root = logging.getLogger()
     root.setLevel(logging.INFO)
 
+    fmt = logging.Formatter(
+        "%(asctime)s %(levelname)s %(name)s: %(message)s",
+        datefmt="%H:%M:%S",
+    )
+
     # File handler (append, one file per day)
     fh = logging.FileHandler(log_file, encoding="utf-8")
     fh.setLevel(logging.INFO)
-    fh.setFormatter(logging.Formatter(
-        "%(asctime)s %(levelname)s %(name)s: %(message)s",
-        datefmt="%H:%M:%S",
-    ))
+    fh.setFormatter(fmt)
     root.addHandler(fh)
+
+    # Console handler
+    ch = logging.StreamHandler()
+    ch.setLevel(logging.INFO)
+    ch.setFormatter(fmt)
+    root.addHandler(ch)
 
     print(f"Logging to {log_file}")
     return log_file

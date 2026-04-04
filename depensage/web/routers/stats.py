@@ -57,53 +57,40 @@ def _parse_num(val) -> float:
         return 0.0
 
 
-def _fmt_date(val):
-    if val is None or val == "":
-        return ""
-    try:
-        serial = float(val)
-        dt = datetime(1899, 12, 30) + timedelta(days=serial)
-        return dt.strftime("%d/%m")
-    except (ValueError, TypeError):
-        return str(val)
-
-
 @router.get("/expenses")
 async def get_expense_stats():
-    """Read 'Expenses so far' pivot table data."""
+    """Read 'Expenses so far' pivot table + budget from latest month."""
     handler, year = _get_handler()
 
-    if not handler.sheet_exists("Expenses so far"):
-        return {"year": year, "rows": [], "month_count": 0}
+    # Read pivot table
+    pivot_rows = []
+    month_count = 0
 
-    # Read pivot table output (A:D, up to 100 rows)
-    values = handler.get_sheet_values("Expenses so far", "A1:D100")
-    if not values:
-        return {"year": year, "rows": [], "month_count": 0}
+    if handler.sheet_exists("Expenses so far"):
+        values = handler.get_sheet_values("Expenses so far", "A1:D100")
+        if values:
+            for row in values:
+                if not row or len(row) < 3:
+                    continue
+                cat = str(row[0]).strip() if row[0] else ""
+                sub = str(row[1]).strip() if len(row) > 1 and row[1] else ""
+                total = _parse_num(row[2] if len(row) > 2 else 0)
+                avg = _parse_num(row[3] if len(row) > 3 else 0)
 
-    # Pivot table has no column headers — all rows are data
-    rows = []
-    for row in values:
-        if not row or len(row) < 3:
-            continue
-        cat = str(row[0]).strip() if row[0] else ""
-        sub = str(row[1]).strip() if len(row) > 1 and row[1] else ""
-        total = _parse_num(row[2] if len(row) > 2 else 0)
-        avg = _parse_num(row[3] if len(row) > 3 else 0)
+                if not cat and not sub:
+                    continue
 
-        if not cat and not sub:
-            continue
+                is_total = "Total" in cat
+                is_grand = cat == "Grand Total"
 
-        # Flag "Total" summary rows
-        is_total = "Total" in cat or "total" in cat
-
-        rows.append({
-            "category": cat.replace(" Total", ""), "subcategory": sub,
-            "total": total, "average": avg, "is_total": is_total,
-        })
+                pivot_rows.append({
+                    "category": cat.replace(" Total", "") if is_total else cat,
+                    "subcategory": sub,
+                    "total": total, "average": avg,
+                    "is_total": is_total, "is_grand": is_grand,
+                })
 
     # Count months from Merged Expenses formula
-    month_count = 0
     if handler.sheet_exists("Merged Expenses"):
         try:
             result = handler.sheets_service.values().get(
@@ -114,11 +101,31 @@ async def get_expense_stats():
             formula_vals = result.get("values", [])
             if formula_vals and formula_vals[0]:
                 formula = str(formula_vals[0][0])
-                month_count = formula.count(";") + 1
+                month_count = formula.count(":")
         except Exception:
             pass
 
-    return {"year": year, "rows": rows, "month_count": month_count}
+    # Read budget from latest month
+    budget_by_cat = {}
+    for month in reversed(MONTH_NAMES):
+        if not handler.sheet_exists(month):
+            continue
+        vm = load_from_sheet(handler, month, year)
+        if not vm.budget_lines:
+            continue
+        for bl in vm.budget_lines:
+            # For שונות (misc), budget is per subcategory
+            if bl.subcategory:
+                key = f"{bl.category}/{bl.subcategory}"
+            else:
+                key = bl.category
+            budget_by_cat[key] = bl.budget_amount
+        break  # Only need the latest month
+
+    return {
+        "year": year, "rows": pivot_rows,
+        "month_count": month_count, "budget": budget_by_cat,
+    }
 
 
 @router.get("/income")
@@ -127,24 +134,36 @@ async def get_income_stats():
     handler, year = _get_handler()
 
     if not handler.sheet_exists("Income so far"):
-        return {"year": year, "rows": [], "month_count": 0}
+        return {"year": year, "rows": []}
 
+    # Income so far: A=category, B=details, C=total, D=average
     values = handler.get_sheet_values("Income so far", "A1:D50")
     if not values:
-        return {"year": year, "rows": [], "month_count": 0}
+        return {"year": year, "rows": []}
 
     rows = []
     for row in values:
-        if not row or len(row) < 2:
+        if not row or len(row) < 1:
             continue
         cat = str(row[0]).strip() if row[0] else ""
-        total = _parse_num(row[1] if len(row) > 1 else 0)
-        avg = _parse_num(row[2] if len(row) > 2 else 0)
-
         if not cat:
             continue
 
-        rows.append({"category": cat, "total": total, "average": avg})
+        is_total = "Total" in cat
+        is_grand = cat == "Grand Total"
+        details = str(row[1]).strip() if len(row) > 1 and row[1] else ""
+        total = _parse_num(row[2] if len(row) > 2 else 0)
+        avg = _parse_num(row[3] if len(row) > 3 else 0)
+
+        # Skip "Total" duplicate rows — they just repeat the category total
+        if is_total and not is_grand:
+            continue
+
+        rows.append({
+            "category": cat, "details": details,
+            "total": total, "average": avg,
+            "is_grand": is_grand,
+        })
 
     return {"year": year, "rows": rows}
 
@@ -161,7 +180,6 @@ async def get_monthly_totals():
 
         vm = load_from_sheet(handler, month, year)
 
-        # Total expenses from expense rows
         expense_total = 0.0
         for row in vm.expense_rows:
             try:
@@ -169,10 +187,7 @@ async def get_monthly_totals():
             except (ValueError, TypeError):
                 pass
 
-        # Income total
         income_total = vm.income_total or 0.0
-
-        # Savings budget
         savings_budget = vm.savings_budget_value or 0.0
 
         months.append({
@@ -190,7 +205,6 @@ async def get_savings_overview():
     """Get current savings goal status from the latest month."""
     handler, year = _get_handler()
 
-    # Find the latest month with data
     for month in reversed(MONTH_NAMES):
         if not handler.sheet_exists(month):
             continue
