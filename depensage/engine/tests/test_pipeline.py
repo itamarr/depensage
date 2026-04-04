@@ -189,10 +189,11 @@ class TestPipeline(unittest.TestCase):
             ["02/03/2024", "Shop C", 300.00],
         ])
         self._setup_classifier_all_classified()
-        # marker at 6: total at 5, data rows 2-4 (3 slots)
-        # first_empty=4 means 1 slot available, need 3, so insert 2
-        self.handler.find_section_marker.return_value = 6
-        self.handler.find_first_empty_expense_row.return_value = 4
+        # marker at 8: sum at 5, blank at 6, budget-marker-like at 7, marker at 8
+        # data rows 2-4 (last_data = marker-3 = 5). first_empty=5 means 1 slot,
+        # need 3, so insert 2. Insert at marker-4 = 4.
+        self.handler.find_section_marker.return_value = 8
+        self.handler.find_first_empty_expense_row.return_value = 5
         staged = run_pipeline([path], self.handler, self.classifier)
 
         # Check staged insert count
@@ -200,9 +201,9 @@ class TestPipeline(unittest.TestCase):
         self.assertEqual(stages[0].expense_insert_needed, 2)
         self.assertEqual(len(stages[0].new_expenses), 3)
 
-        # Commit performs the insert
+        # Commit performs the insert within data area (marker-4)
         result = staged.commit(self.handler)
-        self.handler.insert_rows.assert_called_once_with("February", 5, 2)
+        self.handler.insert_rows.assert_called_once_with("February", 4, 2)
         self.assertEqual(result.months[0].written, 3)
 
     def test_empty_file(self):

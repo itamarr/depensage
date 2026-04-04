@@ -84,7 +84,7 @@ class TestStagedPipelineResult(unittest.TestCase):
         handler.insert_rows.return_value = True
 
         result = staged.commit(handler)
-        handler.insert_rows.assert_called_once_with("March", 19, 3)
+        handler.insert_rows.assert_called_once_with("March", 16, 3)  # marker-4 = 20-4
         handler.write_expense_rows.assert_called_once()
         self.assertEqual(result.months[0].written, 1)
 

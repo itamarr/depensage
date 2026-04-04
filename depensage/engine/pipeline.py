@@ -279,7 +279,7 @@ def run_pipeline(statement_paths, handlers, classifier, year=None,
 
                 first_empty = vm.first_empty_expense_row
                 rows_needed = len(formatted)
-                last_data_row = vm.budget_marker_row - 2
+                last_data_row = vm.budget_marker_row - 3  # before sum row
                 available = last_data_row - first_empty + 1
                 insert_needed = max(0, rows_needed - available)
 

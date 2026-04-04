@@ -464,9 +464,11 @@ class SheetHandler:
         marker_row = cached.markers.get("budget")
         if not marker_row or marker_row <= 3:
             return []
-        # raw_data is 0-indexed. Row 2 = index 1, last data = marker_row-2 = index marker_row-3
+        # raw_data is 0-indexed. Row 2 = index 1.
+        # Data rows end before sum row: last data row = marker_row - 3 (1-based),
+        # so end_idx = marker_row - 3 for exclusive slice.
         start_idx = 1  # row 2
-        end_idx = marker_row - 2  # inclusive, so slice to marker_row-1
+        end_idx = marker_row - 3
         rows = cached.raw_data[start_idx:end_idx]
         # Extract columns B:G (indices 1-6)
         return [row[1:7] if len(row) > 1 else [] for row in rows]
@@ -488,7 +490,7 @@ class SheetHandler:
         if not marker_row or marker_row <= 3:
             return []
         start_idx = 1
-        end_idx = marker_row - 2
+        end_idx = marker_row - 3
         rows = cached.raw_data[start_idx:end_idx]
         # Extract columns B:H (indices 1-7)
         return [row[1:8] if len(row) > 1 else [] for row in rows]
@@ -497,7 +499,7 @@ class SheetHandler:
         """Find first empty row between row 2 and the budget marker (from cache).
 
         Scans column G (date) since every expense has a date.
-        Data rows end at (budget_marker - 2), since (marker - 1) is the total row.
+        Data rows end at (budget_marker - 3), before the sum row.
 
         Returns:
             1-based row number, or None if marker not found.
@@ -508,7 +510,7 @@ class SheetHandler:
         marker_row = cached.markers.get("budget")
         if not marker_row:
             return None
-        last_data_row = marker_row - 2
+        last_data_row = marker_row - 3
         if last_data_row < 2:
             return 2
         # Scan column G (index 6) in rows 2..last_data_row

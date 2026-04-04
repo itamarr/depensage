@@ -160,7 +160,7 @@ def _import_and_derive_coordinates(xlsx_path, handlers):
                 stage.new_expenses = []
                 continue
             rows_needed = len(stage.new_expenses)
-            last_data_row = marker_row - 2
+            last_data_row = marker_row - 3  # before sum row
             available = last_data_row - first_empty + 1
             insert_needed = max(0, rows_needed - available)
             stage.expense_start_row = first_empty

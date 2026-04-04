@@ -366,8 +366,12 @@ class StagedPipelineResult:
                 if stage.expense_insert_needed > 0:
                     marker = handler.find_section_marker(stage.month, "budget")
                     if marker:
+                        # Insert within the data area (before sum/blank/marker rows)
+                        # so Google Sheets auto-expands SUM and ARRAYFORMULA ranges.
+                        # Layout: data rows, sum row (marker-3), blank (marker-2),
+                        # marker (marker-1 in 0-based). Insert at marker-4.
                         handler.insert_rows(
-                            stage.month, marker - 1, stage.expense_insert_needed
+                            stage.month, marker - 4, stage.expense_insert_needed
                         )
                 handler.write_expense_rows(
                     stage.month, stage.expense_start_row, stage.new_expenses
@@ -381,8 +385,10 @@ class StagedPipelineResult:
                         stage.month, "savings"
                     )
                     if savings_marker:
+                        # Insert within income data area (before total/blank/marker)
+                        # so Google Sheets auto-expands SUM ranges.
                         handler.insert_rows(
-                            stage.month, savings_marker - 2,
+                            stage.month, savings_marker - 4,
                             stage.income_insert_needed,
                         )
                 handler.write_income_rows(
