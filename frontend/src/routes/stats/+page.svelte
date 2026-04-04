@@ -6,7 +6,7 @@
 
 	Chart.register(...registerables);
 
-	type ExpenseRow = { category: string; subcategory: string; total: number; average: number };
+	type ExpenseRow = { category: string; subcategory: string; total: number; average: number; is_total?: boolean };
 	type IncomeRow = { category: string; total: number; average: number };
 	type MonthData = { month: string; expenses: number; income: number; savings_budget: number };
 	type SavingsGoal = { goal_name: string; target: number; total: number; progress: number };
@@ -74,7 +74,7 @@
 	function renderBudgetChart() {
 		if (!budgetChartEl || !expenseRows.length) return;
 		// Top-level categories only (rows where category is non-empty and subcategory is empty or it's a total)
-		const cats = expenseRows.filter(r => r.category && !r.subcategory && r.category !== 'Grand Total');
+		const cats = expenseRows.filter(r => r.is_total && r.category !== 'Grand Total');
 		charts.push(new Chart(budgetChartEl, {
 			type: 'bar',
 			data: {
@@ -94,7 +94,7 @@
 
 	function renderPieChart() {
 		if (!pieChartEl || !expenseRows.length) return;
-		const cats = expenseRows.filter(r => r.category && !r.subcategory && r.total > 0 && r.category !== 'Grand Total');
+		const cats = expenseRows.filter(r => r.is_total && r.total > 0 && r.category !== 'Grand Total');
 		const colors = ['#4a9ab4','#e5af42','#2f6577','#ebc46c','#7cc0d6','#b87420','#99561d','#3a7d94','#d4952a','#295463','#f2da9e','#264652','#68391c','#1e3844'];
 		charts.push(new Chart(pieChartEl, {
 			type: 'pie',
@@ -196,7 +196,7 @@
 								</thead>
 								<tbody>
 									{#each expenseRows as row}
-										<tr class="border-t {row.category && !row.subcategory ? 'font-medium' : ''} {row.category === 'Grand Total' ? 'bg-gray-100 font-bold' : 'hover:bg-gray-50'}">
+										<tr class="border-t {row.is_total ? 'font-semibold bg-gray-50' : 'hover:bg-gray-50'} {row.category === 'Grand Total' ? 'bg-gray-100 font-bold' : ''}">
 											<td class="px-2 py-1 text-xs">{row.category}</td>
 											<td class="px-2 py-1 text-xs">{row.subcategory}</td>
 											<td class="px-2 py-1 text-xs text-left">{fmtNum(row.total)}</td>

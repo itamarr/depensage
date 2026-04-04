@@ -44,6 +44,19 @@ def _get_handler():
     return h, current_year
 
 
+def _parse_num(val) -> float:
+    """Parse a number that may be NIS-formatted (e.g., '2,664.45 ₪')."""
+    if val is None or val == "":
+        return 0.0
+    if isinstance(val, (int, float)):
+        return float(val)
+    s = str(val).replace("₪", "").replace(",", "").replace(" ", "").strip()
+    try:
+        return float(s)
+    except (ValueError, TypeError):
+        return 0.0
+
+
 def _fmt_date(val):
     if val is None or val == "":
         return ""
@@ -68,31 +81,25 @@ async def get_expense_stats():
     if not values:
         return {"year": year, "rows": [], "month_count": 0}
 
-    # Parse: row 0 = headers, rows 1+ = data
+    # Pivot table has no column headers — all rows are data
     rows = []
-    for row in values[1:]:
+    for row in values:
         if not row or len(row) < 3:
             continue
         cat = str(row[0]).strip() if row[0] else ""
         sub = str(row[1]).strip() if len(row) > 1 and row[1] else ""
-        total = row[2] if len(row) > 2 else 0
-        avg = row[3] if len(row) > 3 else 0
+        total = _parse_num(row[2] if len(row) > 2 else 0)
+        avg = _parse_num(row[3] if len(row) > 3 else 0)
 
         if not cat and not sub:
             continue
 
-        try:
-            total = float(total) if total else 0
-        except (ValueError, TypeError):
-            total = 0
-        try:
-            avg = float(avg) if avg else 0
-        except (ValueError, TypeError):
-            avg = 0
+        # Flag "Total" summary rows
+        is_total = "Total" in cat or "total" in cat
 
         rows.append({
-            "category": cat, "subcategory": sub,
-            "total": total, "average": avg,
+            "category": cat.replace(" Total", ""), "subcategory": sub,
+            "total": total, "average": avg, "is_total": is_total,
         })
 
     # Count months from Merged Expenses formula
@@ -127,24 +134,15 @@ async def get_income_stats():
         return {"year": year, "rows": [], "month_count": 0}
 
     rows = []
-    for row in values[1:]:
+    for row in values:
         if not row or len(row) < 2:
             continue
         cat = str(row[0]).strip() if row[0] else ""
-        total = row[1] if len(row) > 1 else 0
-        avg = row[2] if len(row) > 2 else 0
+        total = _parse_num(row[1] if len(row) > 1 else 0)
+        avg = _parse_num(row[2] if len(row) > 2 else 0)
 
         if not cat:
             continue
-
-        try:
-            total = float(total) if total else 0
-        except (ValueError, TypeError):
-            total = 0
-        try:
-            avg = float(avg) if avg else 0
-        except (ValueError, TypeError):
-            avg = 0
 
         rows.append({"category": cat, "total": total, "average": avg})
 
