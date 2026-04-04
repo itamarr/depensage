@@ -14,6 +14,7 @@
 	let error = $state('');
 	let loading = $state(true);
 	let year = $state(0);
+	let availableYears = $state<number[]>([]);
 	let monthCount = $state(0);
 
 	let expenseRows = $state<ExpenseRow[]>([]);
@@ -46,14 +47,18 @@
 	let savingsChartEl: HTMLCanvasElement;
 	let charts: Chart[] = [];
 
-	onMount(async () => {
+	async function loadStats(targetYear?: number) {
+		loading = true; error = '';
 		try {
-			const [expResp, incResp, monthResp, savResp] = await Promise.all([
-				get<any>('/stats/expenses'),
-				get<any>('/stats/income'),
-				get<any>('/stats/monthly'),
-				get<any>('/stats/savings'),
+			const qs = targetYear ? `?year=${targetYear}` : '';
+			const [yearsResp, expResp, incResp, monthResp, savResp] = await Promise.all([
+				get<any>('/stats/years'),
+				get<any>(`/stats/expenses${qs}`),
+				get<any>(`/stats/income${qs}`),
+				get<any>(`/stats/monthly${qs}`),
+				get<any>(`/stats/savings${qs}`),
 			]);
+			availableYears = yearsResp.years;
 			year = expResp.year;
 			monthCount = expResp.month_count;
 			expenseRows = expResp.rows;
@@ -64,7 +69,9 @@
 			savingsMonth = savResp.month || '';
 		} catch (e: any) { error = e.message; }
 		loading = false;
-	});
+	}
+
+	onMount(() => loadStats());
 
 	$effect(() => {
 		if (loading) return;
@@ -78,10 +85,10 @@
 		}, 50);
 	});
 
-	// Budget vs Actual bar chart — category totals with budget comparison
+	// Budget vs Actual bar chart — category totals with budget comparison (exclude savings)
 	function renderBudgetChart() {
 		if (!budgetChartEl || !expenseRows.length) return;
-		const cats = expenseRows.filter(r => r.is_total && !r.is_grand);
+		const cats = expenseRows.filter(r => r.is_total && !r.is_grand && r.category !== 'חסכון');
 		const budgetVals = cats.map(r => {
 			const key = r.category;
 			return budget[key] || 0;
@@ -106,7 +113,7 @@
 	// Pie chart — only category totals, no Grand Total or subcategories
 	function renderPieChart() {
 		if (!pieChartEl || !expenseRows.length) return;
-		const cats = expenseRows.filter(r => r.is_total && !r.is_grand && r.total > 0);
+		const cats = expenseRows.filter(r => r.is_total && !r.is_grand && r.total > 0 && r.category !== 'חסכון');
 		const colors = ['#4a9ab4','#e5af42','#2f6577','#ebc46c','#7cc0d6','#b87420','#99561d','#3a7d94','#d4952a','#295463','#f2da9e','#264652','#68391c','#1e3844'];
 		charts.push(new Chart(pieChartEl, {
 			type: 'pie',
@@ -164,6 +171,7 @@
 
 		for (const row of expenseRows) {
 			if (row.is_grand) continue;
+			if (row.category === 'חסכון') continue;  // Exclude savings
 			if (row.is_total) {
 				if (current) {
 					current.total = row.total;
@@ -189,10 +197,19 @@
 		}
 		if (current) groups.push(current);
 
-		// Fill budget for subcategorized groups
+		// Fill budget for groups:
+		// - If category has a direct budget entry (no subcats in budget), use it
+		// - If category has per-subcat budget entries (like שונות), sum them
 		for (const g of groups) {
-			if (g.subcats.length > 0 && g.budget === 0) {
-				g.budget = g.subcats.reduce((sum, s) => sum + (budget[`${g.category}/${s.subcategory}`] || 0), 0);
+			if (g.budget === 0) {
+				// Check direct category budget first
+				const directBudget = budget[g.category];
+				if (directBudget) {
+					g.budget = directBudget;
+				} else if (g.subcats.length > 0) {
+					// Sum per-subcat budgets
+					g.budget = g.subcats.reduce((sum, s) => sum + (budget[`${g.category}/${s.subcategory}`] || 0), 0);
+				}
 			}
 		}
 		return groups;
@@ -202,7 +219,21 @@
 </script>
 
 <div class="max-w-5xl">
-	<h1 class="text-2xl font-bold text-primary-800 mb-2">Statistics</h1>
+	<div class="flex items-center justify-between mb-2">
+		<h1 class="text-2xl font-bold text-primary-800">Statistics</h1>
+		{#if availableYears.length > 1}
+			<select
+				value={year}
+				onchange={(e) => loadStats(Number((e.target as HTMLSelectElement).value))}
+				class="border rounded px-3 py-1.5 text-sm"
+				style="border-color: #b3dbe9;"
+			>
+				{#each availableYears as y}
+					<option value={y}>{y}</option>
+				{/each}
+			</select>
+		{/if}
+	</div>
 	{#if year}
 		<p class="text-sm text-gray-500 mb-6">{year} — {monthCount} month{monthCount !== 1 ? 's' : ''} of data</p>
 	{/if}

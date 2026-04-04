@@ -25,23 +25,25 @@ MONTH_NAMES = [
 ]
 
 
-def _get_handler():
+def _get_handler(target_year: int | None = None):
     settings = load_settings()
     credentials = os.path.abspath(settings["credentials_file"])
     years = get_all_years(settings)
     if not years:
         raise HTTPException(status_code=500, detail="No spreadsheets configured")
-    current_year = max(years)
-    entries = get_entries_for_year(current_year, settings)
+    year = target_year if target_year and target_year in years else max(years)
+    entries = get_entries_for_year(year, settings)
+    if not entries:
+        raise HTTPException(status_code=404, detail=f"No spreadsheet for year {year}")
     for key, entry in entries:
         if entry.get("default"):
             h = SheetHandler(entry["id"])
             h.authenticate(credentials)
-            return h, current_year
+            return h, year
     _, entry = entries[0]
     h = SheetHandler(entry["id"])
     h.authenticate(credentials)
-    return h, current_year
+    return h, year
 
 
 def _parse_num(val) -> float:
@@ -57,10 +59,17 @@ def _parse_num(val) -> float:
         return 0.0
 
 
+@router.get("/years")
+async def get_available_years():
+    """Get list of years with configured spreadsheets."""
+    years = get_all_years()
+    return {"years": years, "current": max(years) if years else None}
+
+
 @router.get("/expenses")
-async def get_expense_stats():
-    """Read 'Expenses so far' pivot table + budget from latest month."""
-    handler, year = _get_handler()
+async def get_expense_stats(year: int | None = None):
+    """Read 'Expenses so far' pivot table + budget from Month Template."""
+    handler, year = _get_handler(year)
 
     # Read pivot table
     pivot_rows = []
@@ -105,22 +114,18 @@ async def get_expense_stats():
         except Exception:
             pass
 
-    # Read budget from latest month
+    # Read budget from Month Template (the planning baseline)
     budget_by_cat = {}
-    for month in reversed(MONTH_NAMES):
-        if not handler.sheet_exists(month):
-            continue
-        vm = load_from_sheet(handler, month, year)
-        if not vm.budget_lines:
-            continue
+    if handler.sheet_exists("Month Template"):
+        vm = load_from_sheet(handler, "Month Template", year)
         for bl in vm.budget_lines:
-            # For שונות (misc), budget is per subcategory
+            if bl.category == "חסכון":
+                continue  # Skip savings — floating value, not planned
             if bl.subcategory:
                 key = f"{bl.category}/{bl.subcategory}"
             else:
                 key = bl.category
             budget_by_cat[key] = bl.budget_amount
-        break  # Only need the latest month
 
     return {
         "year": year, "rows": pivot_rows,
@@ -129,9 +134,9 @@ async def get_expense_stats():
 
 
 @router.get("/income")
-async def get_income_stats():
+async def get_income_stats(year: int | None = None):
     """Read 'Income so far' pivot table data."""
-    handler, year = _get_handler()
+    handler, year = _get_handler(year)
 
     if not handler.sheet_exists("Income so far"):
         return {"year": year, "rows": []}
@@ -169,9 +174,9 @@ async def get_income_stats():
 
 
 @router.get("/monthly")
-async def get_monthly_totals():
+async def get_monthly_totals(year: int | None = None):
     """Get per-month expense and income totals for trend charts."""
-    handler, year = _get_handler()
+    handler, year = _get_handler(year)
 
     months = []
     for month in MONTH_NAMES:
@@ -201,9 +206,9 @@ async def get_monthly_totals():
 
 
 @router.get("/savings")
-async def get_savings_overview():
+async def get_savings_overview(year: int | None = None):
     """Get current savings goal status from the latest month."""
-    handler, year = _get_handler()
+    handler, year = _get_handler(year)
 
     for month in reversed(MONTH_NAMES):
         if not handler.sheet_exists(month):
