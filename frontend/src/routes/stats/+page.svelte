@@ -85,14 +85,22 @@
 		}, 50);
 	});
 
+	function getBudgetForCategory(cat: string): number {
+		// Direct category budget
+		if (budget[cat]) return budget[cat];
+		// Sum per-subcategory budgets (e.g., שונות/מזון בחוץ + שונות/ביגוד + ...)
+		let sum = 0;
+		for (const [key, val] of Object.entries(budget)) {
+			if (key.startsWith(cat + '/')) sum += val;
+		}
+		return sum;
+	}
+
 	// Budget vs Actual bar chart — category totals with budget comparison (exclude savings)
 	function renderBudgetChart() {
 		if (!budgetChartEl || !expenseRows.length) return;
 		const cats = expenseRows.filter(r => r.is_total && !r.is_grand && r.category !== 'חסכון');
-		const budgetVals = cats.map(r => {
-			const key = r.category;
-			return budget[key] || 0;
-		});
+		const budgetVals = cats.map(r => getBudgetForCategory(r.category));
 		charts.push(new Chart(budgetChartEl, {
 			type: 'bar',
 			data: {
