@@ -4,7 +4,7 @@ build-backend = "setuptools.backends._legacy:_Backend"
 
 [project]
 name = "depensage"
-version = "0.1.0"
+version = "1.0.0"
 description = "Automated household expense tracking via Google Sheets"
 readme = "README.md"
 requires-python = ">=3.12"

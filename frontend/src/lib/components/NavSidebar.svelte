@@ -43,7 +43,7 @@
 	<!-- Footer -->
 	<div class="sidebar-footer">
 		{#if !collapsed}
-			<span>v0.1.0</span>
+			<span>v1.0.0</span>
 		{/if}
 	</div>
 </div>

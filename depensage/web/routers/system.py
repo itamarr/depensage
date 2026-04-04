@@ -23,7 +23,7 @@ router = APIRouter(prefix="/api/system", tags=["system"])
 
 @router.get("/health", response_model=HealthResponse)
 async def health():
-    return HealthResponse(status="ok", version="0.1.0")
+    return HealthResponse(status="ok", version="1.0.0")
 
 
 @router.post("/auth", response_model=LoginResponse)
