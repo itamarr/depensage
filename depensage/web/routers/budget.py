@@ -66,6 +66,16 @@ def _parse_num(val) -> float:
         return 0.0
 
 
+def _insert_rows_in_sheets(main_handler, template_handler, sheet_name, row_index, count):
+    """Insert rows in both main and template spreadsheets."""
+    main_handler.insert_rows(sheet_name, row_index, count)
+    if template_handler and template_handler.sheet_exists(sheet_name):
+        try:
+            template_handler.insert_rows(sheet_name, row_index, count)
+        except Exception as e:
+            logger.warning(f"Failed to insert rows in template: {e}")
+
+
 @router.get("/")
 async def get_budget():
     """Read the Month Template's budget section with avg spent context."""
@@ -172,9 +182,23 @@ async def save_budget(req: BudgetSaveRequest):
         if vm.budget_lines:
             first_row = min(bl.row_number for bl in vm.budget_lines)
             last_existing = max(bl.row_number for bl in vm.budget_lines)
+            existing_count = last_existing - first_row + 1
+            new_count = len(req.full_rewrite)
 
-            # Clear all existing budget rows (D, F, G, H only — leave E/accumulated alone)
-            for r in range(first_row, last_existing + 1):
+            # Insert rows if we need more than exist
+            if new_count > existing_count:
+                rows_to_add = new_count - existing_count
+                # Insert within budget area (before total row) so formulas auto-expand
+                insert_at = last_existing + 1
+                _insert_rows_in_sheets(
+                    main_handler, template_handler, "Month Template",
+                    insert_at, rows_to_add,
+                )
+                logger.info(f"Inserted {rows_to_add} rows at {insert_at} in Month Template")
+
+            # Clear all existing + newly added budget rows
+            clear_end = first_row + max(existing_count, new_count) - 1
+            for r in range(first_row, clear_end + 1):
                 for col in "BCDFGH":
                     cell_updates.append((f"{col}{r}", ""))
 
