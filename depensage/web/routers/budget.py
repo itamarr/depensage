@@ -129,23 +129,55 @@ async def get_budget():
 
 class BudgetLineUpdate(BaseModel):
     row_number: int
-    budget_amount: float
+    budget_amount: float | None = None
+    carry_status: str | None = None  # "CARRY", "IGNORE", or ""
 
 
 class BudgetSaveRequest(BaseModel):
-    updates: list[BudgetLineUpdate]
+    updates: list[BudgetLineUpdate] = []
+    deletions: list[int] = []  # row_numbers to clear
+    additions: list[dict] = []  # {category, subcategory, budget_amount, carry_status}
 
 
 @router.put("/")
 async def save_budget(req: BudgetSaveRequest):
-    """Write budget amounts to both Month Template sheets."""
+    """Write budget changes to both Month Template sheets."""
     main_handler, template_handler, year = _get_handlers()
 
-    if not req.updates:
-        return {"status": "no changes"}
+    cell_updates = []
 
-    # Build cell updates: column D (budget amount) for each row
-    cell_updates = [(f"D{u.row_number}", u.budget_amount) for u in req.updates]
+    # Budget amount and flag updates
+    for u in req.updates:
+        if u.budget_amount is not None:
+            cell_updates.append((f"D{u.row_number}", u.budget_amount))
+        if u.carry_status is not None:
+            cell_updates.append((f"H{u.row_number}", u.carry_status))
+
+    # Deletions: clear the row content (B through H)
+    for row in req.deletions:
+        for col in "BCDEFGH":
+            cell_updates.append((f"{col}{row}", ""))
+
+    # Additions: find the last budget row and write after it
+    # (This is complex — additions need row insertion. For now,
+    # we write to the first available empty row before the total row.)
+    if req.additions:
+        vm = load_from_sheet(main_handler, "Month Template", year)
+        # Find the total row (last budget line + 1, or marker - 3)
+        if vm.budget_lines:
+            last_row = max(bl.row_number for bl in vm.budget_lines)
+        else:
+            last_row = vm.budget_marker_row - 4
+        # Write additions starting after last budget line
+        for i, addition in enumerate(req.additions):
+            row = last_row + 1 + i
+            cell_updates.append((f"G{row}", addition.get("category", "")))
+            cell_updates.append((f"F{row}", addition.get("subcategory", "")))
+            cell_updates.append((f"D{row}", addition.get("budget_amount", 0)))
+            cell_updates.append((f"H{row}", addition.get("carry_status", "")))
+
+    if not cell_updates:
+        return {"status": "no changes"}
 
     # Write to current year's Month Template
     main_handler.invalidate_cache("Month Template")
@@ -153,7 +185,7 @@ async def save_budget(req: BudgetSaveRequest):
     if not success:
         raise HTTPException(status_code=500, detail="Failed to write to Month Template")
 
-    logger.info(f"Updated {len(cell_updates)} budget lines in Month Template")
+    logger.info(f"Wrote {len(cell_updates)} budget cell updates to Month Template")
 
     # Write to template spreadsheet
     template_updated = False
@@ -167,6 +199,6 @@ async def save_budget(req: BudgetSaveRequest):
 
     return {
         "status": "updated",
-        "lines_updated": len(cell_updates),
+        "cells_written": len(cell_updates),
         "template_updated": template_updated,
     }
