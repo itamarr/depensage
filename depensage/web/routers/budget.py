@@ -224,7 +224,7 @@ async def save_budget(req: BudgetSaveRequest):
                 cell_updates.append((f"C{row}", f"=sumifs(E2:E120,F2:F120,T(G{row}))"))
 
     if not cell_updates:
-        return {"status": "no changes"}
+        return {"status": "no changes", "cells_written": 0, "template_updated": False}
 
     # Write to current year's Month Template
     main_handler.invalidate_cache("Month Template")
