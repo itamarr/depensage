@@ -36,7 +36,7 @@
 <div class="max-w-4xl">
 	<h1 class="text-2xl font-bold text-primary-800 mb-6">Dashboard</h1>
 
-	<div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-8">
+	<div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
 		<a
 			href="/pipeline"
 			class="block p-6 rounded-xl shadow-sm hover:shadow-md transition-shadow group"
@@ -55,6 +55,16 @@
 			<div class="text-2xl mb-2 group-hover:scale-110 transition-transform inline-block">📅</div>
 			<h2 class="text-lg font-semibold text-primary-700">View Months</h2>
 			<p class="text-sm text-gray-500 mt-1">Browse expenses, budget, and savings by month</p>
+		</a>
+
+		<a
+			href="/stats"
+			class="block p-6 rounded-xl shadow-sm hover:shadow-md transition-shadow group"
+			style="background: white; border: 1px solid #b3dbe9;"
+		>
+			<div class="text-2xl mb-2 group-hover:scale-110 transition-transform inline-block">📈</div>
+			<h2 class="text-lg font-semibold text-primary-700">Statistics</h2>
+			<p class="text-sm text-gray-500 mt-1">Budget vs actual, trends, savings progress</p>
 		</a>
 	</div>
 
