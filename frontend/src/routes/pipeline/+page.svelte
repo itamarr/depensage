@@ -451,7 +451,15 @@
 											{#each pipeSorted(selectedMonth.income) as inc}
 												<tr class="border-t hover:bg-gray-50">
 													<td class="px-2 py-1 text-xs">{inc.date}</td>
-													<td class="px-2 py-1 rtl text-xs">{inc.comments}</td>
+													<td class="px-2 py-1">
+														<input
+															type="text"
+															value={inc.comments}
+															class="text-xs border rounded px-1.5 py-0.5 w-full rtl"
+															style="border-color: #d1d5db;"
+															onchange={(e) => saveIncomeEdit(m.month, m.year, inc.index, inc.category, (e.target as HTMLInputElement).value)}
+														/>
+													</td>
 													<td class="px-2 py-1 text-right text-xs">{inc.amount}</td>
 													<td class="px-2 py-1">
 														<input
