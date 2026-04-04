@@ -8,6 +8,7 @@
 		{ href: '/lookups', label: 'Lookups', icon: '🔍' },
 		{ href: '/categories', label: 'Categories', icon: '📂' },
 		{ href: '/stats', label: 'Statistics', icon: '📈' },
+		{ href: '/budget', label: 'Budget', icon: '💰' },
 		{ href: '/settings', label: 'Settings', icon: '⚙' },
 	];
 
