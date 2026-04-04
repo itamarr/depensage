@@ -34,10 +34,17 @@ DepenSage (from French "dépense" meaning expense + "sage" meaning wise) automat
 
 ## Setup
 
-1. **Google Sheets API**:
-   - Create a Google Cloud project and enable the Sheets API
-   - Create a service account and download the JSON key
-   - Share your expense spreadsheet with the service account email
+1. **Google Sheets API** — create a service account for DepenSage to read/write your spreadsheets:
+
+   a. Go to [Google Cloud Console](https://console.cloud.google.com) and create a new project (or use an existing one)
+   b. Enable the **Google Sheets API**: APIs & Services → Library → search "Google Sheets API" → Enable
+   c. Create a service account: APIs & Services → Credentials → Create Credentials → Service Account
+      - Name it something like "depensage"
+      - No special roles needed (it accesses sheets via sharing, not org-wide)
+   d. Create a key: click the service account → Keys → Add Key → Create new key → JSON
+      - Download the JSON file and save it as `.secrets/depensage-credentials.json` (or any name)
+   e. Share your spreadsheet: open your expense spreadsheet in Google Sheets → Share → paste the service account email (looks like `depensage@your-project.iam.gserviceaccount.com`) → give Editor access
+   f. Repeat sharing for each spreadsheet DepenSage should access (each year's spreadsheet + template)
 
 2. **Install**:
    ```bash
