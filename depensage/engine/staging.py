@@ -473,23 +473,28 @@ def _update_merged_formulas(handler, new_months):
                 valueRenderOption="FORMULA",
             ).execute()
             values = result.get("values", [])
-            if not values or not values[0]:
-                continue
+            current = values[0][0] if values and values[0] else ""
 
-            formula = values[0][0]
-            if not isinstance(formula, str) or "arrayformula" not in formula.lower():
-                continue
+            if isinstance(current, str) and "arrayformula" in current.lower():
+                formula = current
+            else:
+                # Shouldn't happen — template has =arrayformula({})
+                formula = "=arrayformula({})"
 
-            # Append new month ranges before the closing })
-            # Formula looks like: =arrayformula({Jan!D2:F120; Feb!D2:F120})
+            # Append new month ranges inside the braces
+            # Formula: =arrayformula({}) or =arrayformula({Jan!D2:F120; Feb!...})
             for month in new_months:
                 month_ref = f"{month}!{col_range}"
                 if month_ref not in formula:
-                    # Insert before the closing })
-                    formula = formula.rstrip(")")
-                    formula = formula.rstrip("}")
-                    formula = formula.rstrip()
-                    formula += f"; {month_ref}" + "})"
+                    # Strip closing })
+                    inner = formula.rstrip(")").rstrip("}").rstrip()
+                    # Check if braces are empty (template initial state)
+                    if inner.endswith("{"):
+                        # Empty: =arrayformula({ → just add the ref
+                        formula = inner + month_ref + "})"
+                    else:
+                        # Has content: append with separator
+                        formula = inner + "; " + month_ref + "})"
 
             # Write updated formula
             handler.sheets_service.values().update(
