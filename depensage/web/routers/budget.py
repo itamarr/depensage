@@ -133,10 +133,18 @@ class BudgetLineUpdate(BaseModel):
     carry_status: str | None = None  # "CARRY", "IGNORE", or ""
 
 
+class BudgetFullLine(BaseModel):
+    category: str
+    subcategory: str = ""
+    budget_amount: float
+    carry_status: str = ""
+
+
 class BudgetSaveRequest(BaseModel):
     updates: list[BudgetLineUpdate] = []
     deletions: list[int] = []  # row_numbers to clear
     additions: list[dict] = []  # {category, subcategory, budget_amount, carry_status}
+    full_rewrite: list[BudgetFullLine] | None = None  # When reordered, rewrite all lines
 
 
 @router.put("/")
@@ -175,6 +183,23 @@ async def save_budget(req: BudgetSaveRequest):
             cell_updates.append((f"F{row}", addition.get("subcategory", "")))
             cell_updates.append((f"D{row}", addition.get("budget_amount", 0)))
             cell_updates.append((f"H{row}", addition.get("carry_status", "")))
+
+    # Full rewrite (when rows are reordered)
+    if req.full_rewrite is not None:
+        vm = load_from_sheet(main_handler, "Month Template", year)
+        if vm.budget_lines:
+            first_row = min(bl.row_number for bl in vm.budget_lines)
+            # Clear all existing budget data rows
+            for bl in vm.budget_lines:
+                for col in "BCDEFGH":
+                    cell_updates.append((f"{col}{bl.row_number}", ""))
+            # Write new order starting from first_row
+            for i, line in enumerate(req.full_rewrite):
+                row = first_row + i
+                cell_updates.append((f"G{row}", line.category))
+                cell_updates.append((f"F{row}", line.subcategory))
+                cell_updates.append((f"D{row}", line.budget_amount))
+                cell_updates.append((f"H{row}", line.carry_status))
 
     if not cell_updates:
         return {"status": "no changes"}

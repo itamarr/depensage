@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { get, put } from '$lib/api';
 	import ErrorBanner from '$lib/components/ErrorBanner.svelte';
+	import CategoryPicker from '$lib/components/CategoryPicker.svelte';
 
 	type BudgetLine = {
 		category: string; subcategory: string;
@@ -21,6 +22,9 @@
 	// Original state for dirty/revert
 	let originalLines = $state<string>('');
 
+	// Categories for picker
+	let categories = $state<Record<string, string[]>>({});
+
 	// Add form
 	let showAdd = $state(false);
 	let addCategory = $state('');
@@ -28,23 +32,44 @@
 	let addAmount = $state(0);
 	let addFlag = $state('');
 
+	// Drag and drop
+	let dragIdx = $state<number | null>(null);
+	let dragOverIdx = $state<number | null>(null);
+	let reordered = $state(false);
+
 	$effect(() => {
-		get<any>('/budget/')
-			.then(data => {
-				lines = data.lines;
-				averages = data.averages;
-				monthCount = data.month_count;
-				year = data.year;
-				originalLines = JSON.stringify(data.lines);
-				loading = false;
-			})
-			.catch(e => { error = e.message; loading = false; });
+		Promise.all([
+			get<any>('/budget/'),
+			get<{ categories: Record<string, string[]> }>('/categories/'),
+		]).then(([data, catData]) => {
+			lines = data.lines;
+			averages = data.averages;
+			monthCount = data.month_count;
+			year = data.year;
+			originalLines = JSON.stringify(data.lines);
+			categories = catData.categories;
+			loading = false;
+		}).catch(e => { error = e.message; loading = false; });
 	});
 
 	function markDirty() {
 		dirty = JSON.stringify(lines.filter(l => !l._deleted)) !== originalLines
-			|| lines.some(l => l._deleted || l._new);
+			|| lines.some(l => l._deleted || l._new) || reordered;
 		success = '';
+	}
+
+	function handleDragStart(idx: number) { dragIdx = idx; }
+	function handleDragOver(e: DragEvent, idx: number) { e.preventDefault(); dragOverIdx = idx; }
+	function handleDragEnd() { dragIdx = null; dragOverIdx = null; }
+	function handleDrop(targetIdx: number) {
+		if (dragIdx === null || dragIdx === targetIdx) return;
+		const item = lines[dragIdx];
+		const newLines = lines.filter((_, i) => i !== dragIdx);
+		newLines.splice(targetIdx, 0, item);
+		lines = newLines;
+		dragIdx = null; dragOverIdx = null;
+		reordered = true;
+		markDirty();
 	}
 
 	function getAvg(line: BudgetLine): number {
@@ -152,9 +177,23 @@
 				carry_status: l.carry_status,
 			}));
 
-			const resp = await put<any>('/budget/', { updates, deletions, additions });
-			dirty = false;
-			// Remove deleted, mark new as saved
+			// If reordered, send full rewrite instead of incremental updates
+			let payload: any;
+			if (reordered || deletions.length > 0 || additions.length > 0) {
+				// Full rewrite: send all active lines in current order
+				const fullRewrite = lines.filter(l => !l._deleted).map(l => ({
+					category: l.category,
+					subcategory: l.subcategory,
+					budget_amount: l.budget_amount,
+					carry_status: l.carry_status,
+				}));
+				payload = { updates: [], deletions: [], additions: [], full_rewrite: fullRewrite };
+			} else {
+				payload = { updates, deletions, additions };
+			}
+
+			const resp = await put<any>('/budget/', payload);
+			dirty = false; reordered = false;
 			lines = lines.filter(l => !l._deleted).map(l => ({ ...l, _new: false }));
 			originalLines = JSON.stringify(lines);
 
@@ -214,12 +253,15 @@
 			<div class="mb-4 p-3 rounded" style="background: #f0f7fa; border: 1px solid #b3dbe9;">
 				<div class="flex gap-2 items-end flex-wrap">
 					<label class="text-xs text-gray-600">
-						Category
-						<input bind:value={addCategory} class="block border rounded px-2 py-1 text-sm mt-0.5 rtl" />
-					</label>
-					<label class="text-xs text-gray-600">
-						Subcategory
-						<input bind:value={addSubcategory} class="block border rounded px-2 py-1 text-sm mt-0.5 rtl" />
+						Category / Subcategory
+						<div class="mt-0.5">
+							<CategoryPicker
+								{categories}
+								value={addCategory}
+								subValue={addSubcategory}
+								onchange={(cat, sub) => { addCategory = cat; addSubcategory = sub; }}
+							/>
+						</div>
 					</label>
 					<label class="text-xs text-gray-600">
 						Budget
@@ -245,6 +287,7 @@
 			<table class="w-full text-sm" dir="rtl">
 				<thead style="background: #f0f7fa;">
 					<tr>
+						<th class="w-8" dir="ltr"></th>
 						<th class="px-3 py-2 text-right text-xs font-medium text-gray-600">Category</th>
 						<th class="px-3 py-2 text-right text-xs font-medium text-gray-600">Subcategory</th>
 						<th class="px-3 py-2 text-left text-xs font-medium text-gray-600" style="width: 110px;">Budget</th>
@@ -255,12 +298,21 @@
 					</tr>
 				</thead>
 				<tbody>
-					{#each lines as line}
+					{#each lines as line, i}
 						{@const avg = getAvg(line)}
 						{@const diff = line.budget_amount - avg}
 						{@const isSavings = line.category === 'חסכון'}
-						<tr class="border-t {line._deleted ? 'opacity-40 line-through' : ''} {line._new ? 'bg-green-50' : isSavings ? 'bg-gray-50 text-gray-400' : 'hover:bg-gray-50'}">
-							<td class="px-3 py-1.5 text-xs font-medium">{line.category}</td>
+						<!-- svelte-ignore a11y_no_static_element_interactions -->
+						<tr
+							class="border-t {line._deleted ? 'opacity-40 line-through' : ''} {line._new ? 'bg-green-50' : isSavings ? 'bg-gray-50 text-gray-400' : 'hover:bg-gray-50'} {dragOverIdx === i && dragIdx !== i ? 'border-t-2 border-t-primary-400' : ''}"
+							draggable="true"
+							ondragstart={() => handleDragStart(i)}
+							ondragover={(e) => handleDragOver(e, i)}
+							ondragend={handleDragEnd}
+							ondrop={() => handleDrop(i)}
+						>
+							<td class="px-1 text-center cursor-grab text-gray-300 hover:text-gray-500" dir="ltr" style="width:24px;">⠿</td>
+						<td class="px-3 py-1.5 text-xs font-medium">{line.category}</td>
 							<td class="px-3 py-1.5 text-xs">{line.subcategory}</td>
 							<td class="px-3 py-1.5" dir="ltr">
 								{#if isSavings}
@@ -319,6 +371,7 @@
 
 					<!-- Totals -->
 					<tr class="border-t bg-gray-100 font-bold">
+						<td></td>
 						<td class="px-3 py-2 text-xs" colspan="2">Total (excl. savings)</td>
 						<td class="px-3 py-2 text-xs text-left" dir="ltr">{fmtNum(totalBudget)}</td>
 						<td class="px-3 py-2 text-xs text-left" dir="ltr">{fmtNum(totalAvg)}</td>
